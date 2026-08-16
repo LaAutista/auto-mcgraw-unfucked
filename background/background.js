@@ -69,6 +69,8 @@ async function findAndStoreTabs() {
     url: [
       "https://learning.mheducation.com/*",
       "https://ezto.mheducation.com/*",
+      "https://connect.mheducation.com/*",
+      "https://newconnect.mheducation.com/*",
     ],
   });
   if (mheTabs.length > 0) {
@@ -114,8 +116,7 @@ async function findAndStoreTabs() {
   }
 }
 
-async function shouldFocusTabs() {
-  await findAndStoreTabs();
+function shouldFocusTabs() {
   return mheWindowId === aiWindowId;
 }
 
@@ -125,6 +126,8 @@ async function processQuestion(message) {
 
   try {
     await findAndStoreTabs();
+    mheTabId = message.sourceTabId;
+    mheWindowId = message.sourceWindowId;
 
     if (!aiTabId) {
       await sendMessageWithRetry(mheTabId, {
@@ -138,10 +141,6 @@ async function processQuestion(message) {
       return;
     }
 
-    if (!mheTabId) {
-      mheTabId = message.sourceTabId;
-    }
-
     const sameWindow = await shouldFocusTabs();
 
     if (sameWindow) {
@@ -149,10 +148,20 @@ async function processQuestion(message) {
       await new Promise((resolve) => setTimeout(resolve, 300));
     }
 
-    await sendMessageWithRetry(aiTabId, {
+    const aiResponse = await sendMessageWithRetry(aiTabId, {
       type: "receiveQuestion",
       question: message.question,
     });
+
+    if (aiResponse && aiResponse.received === false) {
+      await sendMessageWithRetry(mheTabId, {
+        type: "alertMessage",
+        message: `Could not enter the question into ${aiType}: ${
+          aiResponse.error || "unknown error"
+        }. Check the ${aiType} tab.`,
+      });
+      await sendMessageWithRetry(mheTabId, { type: "stopAutomation" });
+    }
 
     if (sameWindow && lastActiveTabId && lastActiveTabId !== aiTabId) {
       setTimeout(async () => {
@@ -202,6 +211,8 @@ async function processResponse(message) {
         url: [
           "https://learning.mheducation.com/*",
           "https://ezto.mheducation.com/*",
+          "https://connect.mheducation.com/*",
+          "https://newconnect.mheducation.com/*",
         ],
       });
       if (mheTabs.length > 0) {
@@ -251,10 +262,12 @@ async function waitForTabReady(tabId, maxAttempts = 8) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (sender.tab) {
     message.sourceTabId = sender.tab.id;
+    message.sourceWindowId = sender.tab.windowId;
 
     if (
       sender.tab.url.includes("learning.mheducation.com") ||
-      sender.tab.url.includes("ezto.mheducation.com")
+      sender.tab.url.includes("ezto.mheducation.com") ||
+      sender.tab.url.includes("connect.mheducation.com")
     ) {
       if (!originalTabId && !duplicateTabId) {
         mheTabId = sender.tab.id;

@@ -246,50 +246,47 @@ function completeDoubleCreditFlow() {
 }
 
 function fillInAnswers(answers, container) {
-
   if (container.querySelector(".awd-probe-type-fill_in_the_blank")) {
     const inputs = container.querySelectorAll("input.fitb-input");
+    let filledCount = 0;
 
     inputs.forEach((input, index) => {
       if (answers[index]) {
         input.value = answers[index];
         input.dispatchEvent(new Event("input", { bubbles: true }));
+        filledCount++;
       }
     });
-  } else {
-    const choices = container.querySelectorAll(
-      'input[type="radio"], input[type="checkbox"]'
-    );
-
-    choices.forEach((choice, index) => {
-      const label = choice.closest("label");
-      if (label) {
-        const choiceText = label
-          .querySelector(".choiceText")
-          ?.textContent.trim();
-
-        if (choiceText) {
-          const shouldBeSelected = answers.some((ans) => {
-            const match1 = choiceText === ans;
-            const choiceWithoutPeriod = choiceText.replace(/\.$/, "");
-            const answerWithoutPeriod = ans.replace(/\.$/, "");
-            const match2 = choiceWithoutPeriod === answerWithoutPeriod;
-            const match3 = choiceText === ans + ".";
-            const match4 = choiceText.includes(ans) || ans.includes(choiceText);
-
-            if (match1 || match2 || match3 || match4) {
-              return true;
-            }
-            return false;
-          });
-
-          if (shouldBeSelected) {
-            choice.click();
-          }
-        }
-      }
-    });
+    return filledCount === inputs.length ? filledCount : 0;
   }
+
+  const choices = Array.from(
+    container.querySelectorAll('input[type="radio"], input[type="checkbox"]')
+  );
+  const getChoiceText = (choice) =>
+    choice.closest("label")?.querySelector(".choiceText")?.textContent.trim() ||
+    "";
+
+  if (
+    !answers.every((answer) =>
+      choices.some((choice) => isAnswerMatch(getChoiceText(choice), answer))
+    )
+  ) {
+    return 0;
+  }
+
+  let filledCount = 0;
+  choices.forEach((choice) => {
+    if (answers.some((answer) => isAnswerMatch(getChoiceText(choice), answer))) {
+      // Never re-click an already-checked box — that would toggle it off.
+      if (!choice.checked) {
+        choice.click();
+      }
+      filledCount++;
+    }
+  });
+
+  return filledCount;
 }
 
 function checkForCorrectAnswer(container) {
@@ -386,6 +383,29 @@ function pauseForManualMatchingAndResume(questionSignature) {
       }, 500);
     }
   }, 400);
+}
+
+// The AI answered, but none of its answers matched an on-screen option (most
+// common on multiple_select). Instead of waiting for a confidence button that
+// will never enable and killing automation, hand the question to the user and
+// resume automatically once they advance.
+function pauseForManualAnswer(container, answers) {
+  const questionSignature = getQuestionSignature(container);
+  console.warn(
+    LOG_PREFIX,
+    "No on-screen option matched the AI answer:",
+    answers
+  );
+
+  alert(
+    "The AI's answer did not match any option on this question.\n\nAI answer:\n" +
+      (answers && answers.length ? answers.join("\n") : "(no answer)") +
+      "\n\nPlease answer this question manually, then click confidence and next. Automation will resume after you move to the next question."
+  );
+
+  if (isAutomating) {
+    pauseForManualMatchingAndResume(questionSignature);
+  }
 }
 
 function handleForcedLearning() {
@@ -1508,20 +1528,6 @@ async function applyMatchingAnswer(container, rawAnswer) {
 
   return isMatchingAligned(container, targetsByRow);
 }
-function extractChoicesFromCombinedAnswer(answerText, questionChoices) {
-  if (typeof answerText !== "string" || questionChoices.length === 0) {
-    return [];
-  }
-
-  const normalizedAnswer = normalizeChoiceText(answerText).toLowerCase();
-  if (!normalizedAnswer) return [];
-
-  return questionChoices.filter((choice) => {
-    const normalizedChoice = normalizeChoiceText(choice).toLowerCase();
-    return normalizedChoice && normalizedAnswer.includes(normalizedChoice);
-  });
-}
-
 function normalizeResponseAnswers(rawAnswer, questionType, container) {
   if (questionType === "matching") {
     return formatMatchingTargetsForAlert(container, rawAnswer);
@@ -1536,18 +1542,21 @@ function normalizeResponseAnswers(rawAnswer, questionType, container) {
   if (isMultiChoiceType && flattenedAnswers.length === 1) {
     const combinedAnswer = flattenedAnswers[0];
     const questionChoices = getQuestionChoices(container, questionType);
-    const extractedChoices = extractChoicesFromCombinedAnswer(
-      combinedAnswer,
-      questionChoices
+    const exactChoice = questionChoices.find((choice) =>
+      isAnswerMatch(choice, combinedAnswer)
     );
-
-    if (extractedChoices.length > 0) {
-      return dedupeAnswers(extractedChoices);
+    if (exactChoice) {
+      return [exactChoice];
     }
 
     const splitAnswers = splitCompoundAnswer(combinedAnswer);
     if (splitAnswers.length > 1) {
-      return dedupeAnswers(splitAnswers);
+      const matchedChoices = splitAnswers.map((answer) =>
+        questionChoices.find((choice) => isAnswerMatch(choice, answer))
+      );
+      if (matchedChoices.every(Boolean)) {
+        return dedupeAnswers(matchedChoices);
+      }
     }
   }
 
@@ -1593,10 +1602,22 @@ async function processChatGPTResponse(responseText) {
       return;
     }
   } else if (questionType === "select_text") {
-    const choices = container.querySelectorAll(
-      ".select-text-component .choice.-interactive"
+    const choices = Array.from(
+      container.querySelectorAll(".select-text-component .choice.-interactive")
     );
 
+    if (
+      !answers.every((answer) =>
+        choices.some((choice) =>
+          isAnswerMatch(choice.textContent.trim(), answer)
+        )
+      )
+    ) {
+      pauseForManualAnswer(container, answers);
+      return;
+    }
+
+    let filledCount = 0;
     choices.forEach((choice) => {
       const choiceText = choice.textContent.trim();
       if (!choiceText) return;
@@ -1607,10 +1628,20 @@ async function processChatGPTResponse(responseText) {
 
       if (shouldBeSelected) {
         choice.click();
+        filledCount++;
       }
     });
+
+    if (filledCount === 0) {
+      pauseForManualAnswer(container, answers);
+      return;
+    }
   } else {
-    fillInAnswers(answers, container);
+    const filledCount = fillInAnswers(answers, container);
+    if (filledCount === 0) {
+      pauseForManualAnswer(container, answers);
+      return;
+    }
   }
 
   if (isAutomating) {

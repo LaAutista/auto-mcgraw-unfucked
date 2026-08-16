@@ -3,6 +3,7 @@ let isAutomating = false;
 let lastIncorrectQuestion = null;
 let lastCorrectAnswer = null;
 let buttonAdded = false;
+let manualPauseIntervalId = null;
 
 function setupMessageListener() {
   if (messageListener) {
@@ -21,17 +22,32 @@ function setupMessageListener() {
       sendResponse({ received: true });
       return true;
     }
+
+    if (message.type === "stopAutomation") {
+      stopAutomation(null);
+      sendResponse({ received: true });
+      return true;
+    }
   };
 
   chrome.runtime.onMessage.addListener(messageListener);
 }
 
 function isQuizPage() {
+  const hasPrompt =
+    document.querySelector(".question") ||
+    document.querySelector(".worksheet__main");
+
   return (
-    document.querySelector(".question") &&
+    hasPrompt &&
     (document.querySelector(".answers-wrap.multiple-choice") ||
       document.querySelector(".answers-wrap.boolean") ||
-      document.querySelector(".answers-wrap.input-response"))
+      document.querySelector(".answers-wrap.input-response") ||
+      document.querySelector(".answers-wrap.ranking") ||
+      document.querySelector('.answers-wrap input[type="checkbox"]') ||
+      document.querySelector(
+        ".worksheet__main fieldset .worksheet--mc__choices"
+      ))
   );
 }
 
@@ -78,8 +94,16 @@ function checkForQuizEnd() {
   return false;
 }
 
+function clearManualPauseWatcher() {
+  if (manualPauseIntervalId !== null) {
+    clearInterval(manualPauseIntervalId);
+    manualPauseIntervalId = null;
+  }
+}
+
 function stopAutomation(reason = "Quiz completed") {
   isAutomating = false;
+  clearManualPauseWatcher();
 
   chrome.storage.sync.get("aiModel", function (data) {
     const currentModel = data.aiModel || "chatgpt";
@@ -97,7 +121,38 @@ function stopAutomation(reason = "Quiz completed") {
     }
   });
 
-  alert(`Automation stopped: ${reason}`);
+  if (reason) {
+    alert(`Automation stopped: ${reason}`);
+  }
+}
+
+// After a manual fallback, resume only when the user advances to a different
+// question (detected via the "N of M" counter in the footer changing).
+function pauseForManualAndResume() {
+  const progressEl = document.querySelector(".footer__progress__heading");
+  const signature = progressEl ? progressEl.textContent.trim() : "";
+
+  clearManualPauseWatcher();
+
+  manualPauseIntervalId = setInterval(() => {
+    if (!isAutomating) {
+      clearManualPauseWatcher();
+      return;
+    }
+
+    const currentEl = document.querySelector(".footer__progress__heading");
+    const currentSignature = currentEl ? currentEl.textContent.trim() : "";
+
+    if (currentSignature && currentSignature !== signature) {
+      clearManualPauseWatcher();
+
+      setTimeout(() => {
+        if (isAutomating) {
+          checkForNextStep();
+        }
+      }, 500);
+    }
+  }, 400);
 }
 
 function checkForNextStep() {
@@ -114,7 +169,123 @@ function checkForNextStep() {
   }
 }
 
+// Build input + label-text pairs for choice questions. The primary label
+// markup is .answers--mc .answer__label--mc; fall back to wrapping labels or
+// aria-labels so newer checkbox-based questions are covered too.
+function getChoicePairs(inputSelector) {
+  const inputs = Array.from(document.querySelectorAll(inputSelector));
+  const labels = Array.from(
+    document.querySelectorAll(".answers--mc .answer__label--mc")
+  );
+
+  return inputs.map((input, i) => {
+    let text = "";
+    if (labels[i]) {
+      text = labels[i].textContent.trim();
+    } else {
+      const wrappingLabel = input.closest("label");
+      if (wrappingLabel) {
+        text = wrappingLabel.textContent.trim();
+      } else {
+        text = (input.getAttribute("aria-label") || input.value || "").trim();
+      }
+    }
+    return { input, text };
+  });
+}
+
+// Worksheet MC ("classification") questions: one prompt, then a numbered list
+// of items, each with its own fieldset of radio choices (same choices per
+// item). Prompt text excludes the per-item radio markup; items and the shared
+// choice list go into options as { items, choices }.
+function parseWorksheetMcQuestion() {
+  const main = document.querySelector(".worksheet__main");
+  if (!main) return null;
+
+  const promptClone = main.cloneNode(true);
+  promptClone.querySelectorAll("ol, fieldset").forEach((el) => el.remove());
+  const questionText = promptClone.textContent.trim();
+
+  const items = Array.from(main.querySelectorAll("ol > li"))
+    .map((li) => {
+      const firstPara = li.querySelector("p");
+      return firstPara ? firstPara.textContent.trim() : "";
+    })
+    .filter(Boolean);
+
+  const firstGroup = main.querySelector("fieldset");
+  const choices = firstGroup
+    ? Array.from(firstGroup.querySelectorAll('input[type="radio"]'))
+        .map((radio) => {
+          const label = firstGroup.querySelector(`label[for="${radio.id}"]`);
+          return (label
+            ? label.textContent
+            : radio.getAttribute("title") || ""
+          ).trim();
+        })
+        .filter(Boolean)
+    : [];
+
+  if (!items.length || !choices.length) return null;
+
+  return {
+    type: "worksheet_mc",
+    question: questionText,
+    options: { items, choices },
+    previousCorrection: lastIncorrectQuestion
+      ? {
+          question: lastIncorrectQuestion,
+          correctAnswer: lastCorrectAnswer,
+        }
+      : null,
+  };
+}
+
+// The AI returns one choice per item, in item order. For each item's fieldset
+// group, click the radio whose label (or title) matches. All-or-nothing:
+// a partially matched worksheet is treated as unmatched for manual fallback.
+function handleWorksheetMcAnswer(answer) {
+  const answers = (Array.isArray(answer) ? answer : [answer]).map(String);
+  const groups = Array.from(
+    document.querySelectorAll(".worksheet__main fieldset")
+  );
+  if (!groups.length) return 0;
+
+  let applied = 0;
+
+  groups.forEach((group, i) => {
+    const target = answers[i];
+    if (!target) return;
+
+    const radios = Array.from(group.querySelectorAll('input[type="radio"]'));
+    for (const radio of radios) {
+      const label = group.querySelector(`label[for="${radio.id}"]`);
+      const labelText = label ? label.textContent.trim() : "";
+      const titleText = (radio.getAttribute("title") || "").trim();
+
+      if (
+        isOptionMatch(labelText, target) ||
+        isOptionMatch(titleText, target)
+      ) {
+        if (!radio.checked) {
+          radio.click();
+        }
+        applied++;
+        break;
+      }
+    }
+  });
+
+  return applied === groups.length ? applied : 0;
+}
+
 function parseQuestion() {
+  if (
+    document.querySelector(".worksheet__main fieldset .worksheet--mc__choices")
+  ) {
+    return parseWorksheetMcQuestion();
+  }
+
   const questionElement = document.querySelector(".question");
   if (!questionElement) {
     return null;
@@ -123,7 +294,18 @@ function parseQuestion() {
   let questionType = "";
   let options = [];
 
-  if (document.querySelector(".answers-wrap.multiple-choice")) {
+  if (document.querySelector(".answers-wrap.ranking")) {
+    questionType = "ranking";
+    const itemElements = document.querySelectorAll(
+      ".answers-wrap.ranking .answer--matching__option"
+    );
+    options = Array.from(itemElements).map((el) => el.textContent.trim());
+  } else if (document.querySelector('.answers-wrap input[type="checkbox"]')) {
+    questionType = "multiple_response";
+    options = getChoicePairs('.answers-wrap input[type="checkbox"]').map(
+      (pair) => pair.text.replace(/^[a-z]\s+/, "")
+    );
+  } else if (document.querySelector(".answers-wrap.multiple-choice")) {
     questionType = "multiple_choice";
     const optionElements = document.querySelectorAll(
       ".answers--mc .answer__label--mc"
@@ -184,12 +366,39 @@ function processChatGPTResponse(responseText) {
     const response = JSON.parse(responseText);
     const answer = response.answer;
 
-    if (document.querySelector(".answers-wrap.multiple-choice")) {
-      handleMultipleChoiceAnswer(answer);
+    let applied = 0;
+    if (
+      document.querySelector(
+        ".worksheet__main fieldset .worksheet--mc__choices"
+      )
+    ) {
+      applied = handleWorksheetMcAnswer(answer);
+    } else if (document.querySelector(".answers-wrap.ranking")) {
+      applied = handleRankingAnswer(answer);
+    } else if (document.querySelector('.answers-wrap input[type="checkbox"]')) {
+      applied = handleMultipleResponseAnswer(answer);
+    } else if (document.querySelector(".answers-wrap.multiple-choice")) {
+      applied = handleMultipleChoiceAnswer(answer);
     } else if (document.querySelector(".answers-wrap.boolean")) {
-      handleTrueFalseAnswer(answer);
+      applied = handleTrueFalseAnswer(answer);
     } else if (document.querySelector(".answers-wrap.input-response")) {
-      handleFillInTheBlankAnswer(answer);
+      applied = handleFillInTheBlankAnswer(answer);
+    }
+
+    if (applied === 0) {
+      console.warn(
+        "[Auto-McGraw][ezto] AI answer did not match anything on the page:",
+        answer
+      );
+      if (isAutomating) {
+        alert(
+          "The AI's answer did not match anything on this question.\n\nAI answer:\n" +
+            JSON.stringify(answer) +
+            "\n\nPlease answer this question manually, then click Next. Automation will resume on the next question."
+        );
+        pauseForManualAndResume();
+      }
+      return;
     }
 
     if (isAutomating) {
@@ -221,25 +430,118 @@ function processChatGPTResponse(responseText) {
   }
 }
 
+// Fuzzy equality between an on-screen option and an AI-returned answer.
+function isOptionMatch(choiceText, answerText) {
+  if (!choiceText || answerText === null || answerText === undefined) {
+    return false;
+  }
+
+  const choice = String(choiceText).trim().replace(/^[a-z]\s+/, "");
+  const ans = String(answerText).trim().replace(/^[a-z]\s+/, "");
+  if (!choice || !ans) return false;
+
+  if (choice === ans) return true;
+  if (choice.replace(/\.$/, "") === ans.replace(/\.$/, "")) return true;
+  if (choice === ans + ".") return true;
+
+  return false;
+}
+
 function handleMultipleChoiceAnswer(answer) {
-  const radioButtons = document.querySelectorAll(
-    '.answers--mc input[type="radio"]'
-  );
-  const labels = document.querySelectorAll(".answers--mc .answer__label--mc");
+  const answerText = Array.isArray(answer) ? answer[0] : answer;
+  const pairs = getChoicePairs('.answers--mc input[type="radio"]');
 
-  for (let i = 0; i < labels.length; i++) {
-    const labelText = labels[i].textContent.trim().replace(/^[a-z]\s+/, "");
-
-    if (
-      labelText === answer ||
-      labelText.replace(/\.$/, "") === answer.replace(/\.$/, "") ||
-      labelText.includes(answer) ||
-      answer.includes(labelText)
-    ) {
-      radioButtons[i].click();
-      break;
+  for (const pair of pairs) {
+    if (isOptionMatch(pair.text, answerText)) {
+      if (!pair.input.checked) {
+        pair.input.click();
+      }
+      return 1;
     }
   }
+
+  return 0;
+}
+
+// "Select all that apply": click every checkbox whose label matches any of
+// the AI's answers. Never re-click an already-checked box (would toggle off).
+function handleMultipleResponseAnswer(answer) {
+  const answers = (Array.isArray(answer) ? answer : [answer]).map(String);
+  const pairs = getChoicePairs('.answers-wrap input[type="checkbox"]');
+
+  if (
+    !answers.every((ans) =>
+      pairs.some((pair) => isOptionMatch(pair.text, ans))
+    )
+  ) {
+    return 0;
+  }
+
+  let clicked = 0;
+  for (const pair of pairs) {
+    const shouldBeSelected = answers.some((ans) =>
+      isOptionMatch(pair.text, ans)
+    );
+    if (shouldBeSelected) {
+      if (!pair.input.checked) {
+        pair.input.click();
+      }
+      clicked++;
+    }
+  }
+
+  return clicked;
+}
+
+// Ranking questions: each item row has a native <select> whose option values
+// are the rank positions ("1".."N"). The AI returns every item text in the
+// correct order; position = index + 1. All-or-nothing: a partially matched
+// ranking is treated as unmatched so the user can fix it manually.
+function handleRankingAnswer(answer) {
+  let orderedItems;
+
+  if (Array.isArray(answer)) {
+    orderedItems = answer.map(String);
+  } else if (answer && typeof answer === "object") {
+    // Also accept {"Item text": position} maps.
+    orderedItems = Object.entries(answer)
+      .sort((a, b) => Number(a[1]) - Number(b[1]))
+      .map(([itemText]) => itemText);
+  } else {
+    orderedItems = [String(answer)];
+  }
+
+  const rows = Array.from(
+    document.querySelectorAll(".answers-wrap.ranking li.answer--matching-wrap")
+  );
+  if (!rows.length) return 0;
+
+  const usedAnswerIndexes = new Set();
+  let placed = 0;
+
+  for (const row of rows) {
+    const textEl = row.querySelector(".answer--matching__option");
+    const select = row.querySelector("select.answer--matching__button");
+    if (!textEl || !select) continue;
+
+    const itemText = textEl.textContent.trim();
+    const matchIndex = orderedItems.findIndex(
+      (ans, idx) => !usedAnswerIndexes.has(idx) && isOptionMatch(itemText, ans)
+    );
+    if (matchIndex === -1) continue;
+
+    usedAnswerIndexes.add(matchIndex);
+
+    const position = String(matchIndex + 1);
+    if (select.value !== position) {
+      select.value = position;
+      select.dispatchEvent(new Event("input", { bubbles: true }));
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    placed++;
+  }
+
+  return placed === rows.length ? placed : 0;
 }
 
 function handleTrueFalseAnswer(answer) {
@@ -250,9 +552,9 @@ function handleTrueFalseAnswer(answer) {
     if (!buttonSpan) {
       continue;
     }
-    
+
     const fullText = buttonSpan.textContent;
-    
+
     const buttonText = fullText.trim().split(",")[0].trim();
 
     if (
@@ -260,11 +562,12 @@ function handleTrueFalseAnswer(answer) {
       (buttonText === "False" && (answer === "False" || answer === false))
     ) {
       button.click();
-      return;
+      return 1;
     }
   }
-  
+
   console.error("No matching button found for answer:", answer);
+  return 0;
 }
 
 function handleFillInTheBlankAnswer(answer) {
@@ -282,10 +585,11 @@ function handleFillInTheBlankAnswer(answer) {
     inputField.value = answerText;
     inputField.dispatchEvent(new Event("input", { bubbles: true }));
     inputField.dispatchEvent(new Event("change", { bubbles: true }));
-
-  } else {
-    console.error("Could not find input field for fill in the blank");
+    return 1;
   }
+
+  console.error("Could not find input field for fill in the blank");
+  return 0;
 }
 
 function addAssistantButton() {
@@ -387,7 +691,7 @@ function addAssistantButton() {
     settingsBtn.innerHTML = `
       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="3"></circle>
-        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06-.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06-.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06-.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
       </svg>
     `;
 

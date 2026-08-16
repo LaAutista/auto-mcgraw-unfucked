@@ -14,6 +14,11 @@
 
 </div>
 
+> [!NOTE]
+> This is LaAutista's community fork of
+> [GooglyBlox/auto-mcgraw](https://github.com/GooglyBlox/auto-mcgraw). It adds
+> more reliable AI response handling plus Connect, EZTO, and MuzzyLane support.
+
 ---
 
 ## Public Service Announcement
