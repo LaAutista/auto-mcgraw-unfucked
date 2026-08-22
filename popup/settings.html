@@ -104,6 +104,19 @@
         <h2>Features</h2>
         <div class="feature-toggle">
           <label class="toggle-container">
+            <input type="checkbox" id="tab-switching-toggle" />
+            <span class="toggle-slider"></span>
+            <div class="toggle-label">
+              <h3>Switch Between Tabs</h3>
+              <p>
+                Show the AI tab while asking, then return when both tabs share a
+                window
+              </p>
+            </div>
+          </label>
+        </div>
+        <div class="feature-toggle">
+          <label class="toggle-container">
             <input type="checkbox" id="double-credit-toggle" />
             <span class="toggle-slider"></span>
             <div class="toggle-label">
@@ -140,24 +153,6 @@
               </p>
             </div>
           </label>
-        </div>
-      </div>
-
-      <div class="settings-section">
-        <h2>Version Information</h2>
-        <div class="version-info">
-          <div class="version-current">
-            <span class="version-label">Current Version:</span>
-            <span id="current-version">Loading...</span>
-          </div>
-          <div class="version-latest">
-            <span class="version-label">Latest Version:</span>
-            <span id="latest-version">Checking...</span>
-          </div>
-          <div id="version-status">Checking for updates...</div>
-          <button id="check-updates" class="update-button">
-            Check for Updates
-          </button>
         </div>
       </div>
 

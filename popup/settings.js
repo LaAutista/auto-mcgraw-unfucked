@@ -6,19 +6,9 @@ document.addEventListener("DOMContentLoaded", function () {
   const geminiButton = document.getElementById("gemini");
   const deepseekButton = document.getElementById("deepseek");
   const statusMessage = document.getElementById("status-message");
-  const currentVersionElement = document.getElementById("current-version");
-  const latestVersionElement = document.getElementById("latest-version");
-  const versionStatusElement = document.getElementById("version-status");
-  const checkUpdatesButton = document.getElementById("check-updates");
   const footerVersionElement = document.getElementById("footer-version");
 
-  const currentVersion = chrome.runtime.getManifest().version;
-  currentVersionElement.textContent = `v${currentVersion}`;
-  footerVersionElement.textContent = `v${currentVersion}`;
-
-  checkForUpdates();
-
-  checkUpdatesButton.addEventListener("click", checkForUpdates);
+  footerVersionElement.textContent = `v${chrome.runtime.getManifest().version}`;
 
   chrome.storage.sync.get("aiModel", function (data) {
     const currentModel = data.aiModel || "chatgpt";
@@ -68,14 +58,28 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
+  const tabSwitchingToggle = document.getElementById("tab-switching-toggle");
   const doubleCreditToggle = document.getElementById("double-credit-toggle");
   const randomConfidenceToggle = document.getElementById("random-confidence-toggle");
   const pauseBeforeSubmitToggle = document.getElementById("pause-before-submit-toggle");
 
-  chrome.storage.sync.get(["doubleCreditMode", "randomConfidence", "pauseBeforeSubmit"], function (data) {
-    doubleCreditToggle.checked = data.doubleCreditMode || false;
-    randomConfidenceToggle.checked = data.randomConfidence || false;
-    pauseBeforeSubmitToggle.checked = data.pauseBeforeSubmit || false;
+  chrome.storage.sync.get(
+    [
+      "tabSwitchingEnabled",
+      "doubleCreditMode",
+      "randomConfidence",
+      "pauseBeforeSubmit",
+    ],
+    function (data) {
+      tabSwitchingToggle.checked = data.tabSwitchingEnabled !== false;
+      doubleCreditToggle.checked = data.doubleCreditMode || false;
+      randomConfidenceToggle.checked = data.randomConfidence || false;
+      pauseBeforeSubmitToggle.checked = data.pauseBeforeSubmit || false;
+    }
+  );
+
+  tabSwitchingToggle.addEventListener("change", function () {
+    chrome.storage.sync.set({ tabSwitchingEnabled: this.checked });
   });
 
   doubleCreditToggle.addEventListener("change", function () {
@@ -152,68 +156,4 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }, 5000);
 
-  async function checkForUpdates() {
-    try {
-      versionStatusElement.textContent = "Checking for updates...";
-      versionStatusElement.className = "checking";
-      checkUpdatesButton.disabled = true;
-      latestVersionElement.textContent = "Checking...";
-
-      const response = await fetch(
-        "https://api.github.com/repos/LaAutista/auto-mcgraw-unfucked/releases/latest"
-      );
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const releaseData = await response.json();
-      const latestVersion = releaseData.tag_name.replace("v", "");
-      latestVersionElement.textContent = `v${latestVersion}`;
-
-      const currentVersionParts = currentVersion.split(".").map(Number);
-      const latestVersionParts = latestVersion.split(".").map(Number);
-
-      let isUpdateAvailable = false;
-
-      for (
-        let i = 0;
-        i < Math.max(currentVersionParts.length, latestVersionParts.length);
-        i++
-      ) {
-        const current = currentVersionParts[i] || 0;
-        const latest = latestVersionParts[i] || 0;
-
-        if (latest > current) {
-          isUpdateAvailable = true;
-          break;
-        } else if (current > latest) {
-          break;
-        }
-      }
-
-      if (isUpdateAvailable) {
-        versionStatusElement.textContent = `New version ${releaseData.tag_name} is available!`;
-        versionStatusElement.className = "update-available";
-
-        versionStatusElement.style.cursor = "pointer";
-        versionStatusElement.onclick = () => {
-          chrome.tabs.create({ url: releaseData.html_url });
-        };
-      } else {
-        versionStatusElement.textContent = "You're using the latest version!";
-        versionStatusElement.className = "up-to-date";
-        versionStatusElement.style.cursor = "default";
-        versionStatusElement.onclick = null;
-      }
-    } catch (error) {
-      console.error("Error checking for updates:", error);
-      versionStatusElement.textContent =
-        "Error checking for updates. Please try again later.";
-      versionStatusElement.className = "error";
-      latestVersionElement.textContent = "Error";
-    } finally {
-      checkUpdatesButton.disabled = false;
-    }
-  }
 });

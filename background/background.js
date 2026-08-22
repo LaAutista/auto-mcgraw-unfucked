@@ -1,7 +1,6 @@
 let mheTabId = null;
 let aiTabId = null;
 let aiType = null;
-let lastActiveTabId = null;
 let processingQuestion = false;
 let mheWindowId = null;
 let aiWindowId = null;
@@ -19,9 +18,12 @@ function isDeepSeekTabUrl(url = "") {
   return url.includes("chat.deepseek.com") || url.includes("deepseek.chat");
 }
 
-chrome.tabs.onActivated.addListener((activeInfo) => {
-  lastActiveTabId = activeInfo.tabId;
-});
+function storeAiTab(tabs, preferredWindowId) {
+  const tab =
+    tabs.find((candidate) => candidate.windowId === preferredWindowId) || tabs[0];
+  aiTabId = tab?.id ?? null;
+  aiWindowId = tab?.windowId ?? null;
+}
 
 function sendMessageWithRetry(tabId, message, maxAttempts = 3, delay = 1000) {
   return new Promise((resolve, reject) => {
@@ -65,7 +67,7 @@ async function focusTab(tabId) {
   }
 }
 
-async function findAndStoreTabs() {
+async function findAndStoreTabs(preferredWindowId) {
   const mheTabs = await promiseApi.tabs.query({
     url: [
       "https://learning.mheducation.com/*",
@@ -85,40 +87,25 @@ async function findAndStoreTabs() {
 
   if (aiModel === "chatgpt") {
     const tabs = await promiseApi.tabs.query({ url: "https://chatgpt.com/*" });
-    if (tabs.length > 0) {
-      aiTabId = tabs[0].id;
-      aiWindowId = tabs[0].windowId;
-    } else {
-      aiTabId = null;
-    }
+    storeAiTab(tabs, preferredWindowId);
   } else if (aiModel === "gemini") {
     const tabs = await promiseApi.tabs.query({
       url: "https://gemini.google.com/*",
     });
-    if (tabs.length > 0) {
-      aiTabId = tabs[0].id;
-      aiWindowId = tabs[0].windowId;
-    } else {
-      aiTabId = null;
-    }
+    storeAiTab(tabs, preferredWindowId);
   } else if (aiModel === "deepseek") {
     const tabs = await promiseApi.tabs.query({
       url: DEEPSEEK_URL_PATTERNS,
     });
-    if (tabs.length > 0) {
-      const preferredTab =
-        tabs.find((tab) => tab.url && tab.url.includes("chat.deepseek.com")) ||
-        tabs[0];
-      aiTabId = preferredTab.id;
-      aiWindowId = preferredTab.windowId;
-    } else {
-      aiTabId = null;
-    }
+    storeAiTab(tabs, preferredWindowId);
   }
 }
 
-function shouldFocusTabs() {
-  return mheWindowId === aiWindowId;
+async function shouldFocusTabs() {
+  const { tabSwitchingEnabled } = await promiseApi.storage.sync.get(
+    "tabSwitchingEnabled"
+  );
+  return tabSwitchingEnabled !== false && mheWindowId === aiWindowId;
 }
 
 async function processQuestion(message) {
@@ -126,9 +113,10 @@ async function processQuestion(message) {
   processingQuestion = true;
 
   try {
-    await findAndStoreTabs();
+    await findAndStoreTabs(message.sourceWindowId);
     mheTabId = message.sourceTabId;
     mheWindowId = message.sourceWindowId;
+    const returnTabId = mheTabId;
 
     if (!aiTabId) {
       await sendMessageWithRetry(mheTabId, {
@@ -142,9 +130,9 @@ async function processQuestion(message) {
       return;
     }
 
-    const sameWindow = await shouldFocusTabs();
+    const switchTabs = await shouldFocusTabs();
 
-    if (sameWindow) {
+    if (switchTabs) {
       await focusTab(aiTabId);
       await new Promise((resolve) => setTimeout(resolve, 300));
     }
@@ -164,10 +152,12 @@ async function processQuestion(message) {
       await sendMessageWithRetry(mheTabId, { type: "stopAutomation" });
     }
 
-    if (sameWindow && lastActiveTabId && lastActiveTabId !== aiTabId) {
-      setTimeout(async () => {
-        await focusTab(lastActiveTabId);
-      }, 1000);
+    if (
+      (await shouldFocusTabs()) &&
+      returnTabId &&
+      returnTabId !== aiTabId
+    ) {
+      await focusTab(returnTabId);
     }
   } catch (error) {
     if (mheTabId) {
@@ -224,9 +214,9 @@ async function processResponse(message) {
       }
     }
 
-    const sameWindow = await shouldFocusTabs();
+    const switchTabs = await shouldFocusTabs();
 
-    if (sameWindow) {
+    if (switchTabs) {
       await focusTab(mheTabId);
       await new Promise((resolve) => setTimeout(resolve, 300));
     }

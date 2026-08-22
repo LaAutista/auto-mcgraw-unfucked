@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Auto-McGraw Smartbook",
-  "version": "2.5",
+  "version": "2.6",
   "description": "Transfers a question from MHEducation's Smartbook to AI assistants and then uses their response to auto‐select an answer.",
   "permissions": ["tabs", "storage"],
   "host_permissions": [
@@ -14,8 +14,7 @@
     "https://chatgpt.com/*",
     "https://gemini.google.com/*",
     "https://chat.deepseek.com/*",
-    "https://deepseek.chat/*",
-    "https://api.github.com/*"
+    "https://deepseek.chat/*"
   ],
   "background": {
     "scripts": ["background/background.js"],
