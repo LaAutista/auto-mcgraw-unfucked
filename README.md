@@ -4,13 +4,13 @@
 
 <img src="assets/icon.png" alt="Auto-McGraw Logo" width="200">
 
-[![Release](https://img.shields.io/github/v/release/GooglyBlox/auto-mcgraw?include_prereleases&style=flat-square&cache=1)](https://github.com/GooglyBlox/auto-mcgraw/releases)
-[![License](https://img.shields.io/github/license/GooglyBlox/auto-mcgraw?style=flat-square&cache=1)](LICENSE)
-[![Downloads](https://img.shields.io/github/downloads/GooglyBlox/auto-mcgraw/total?style=flat-square&cache=1)](https://github.com/GooglyBlox/auto-mcgraw/releases)
+[![Release](https://img.shields.io/github/v/release/LaAutista/auto-mcgraw-unfucked?include_prereleases&style=flat-square&cache=1)](https://github.com/LaAutista/auto-mcgraw-unfucked/releases)
+[![License](https://img.shields.io/github/license/LaAutista/auto-mcgraw-unfucked?style=flat-square&cache=1)](LICENSE)
+[![Downloads](https://img.shields.io/github/downloads/LaAutista/auto-mcgraw-unfucked/total?style=flat-square&cache=1)](https://github.com/LaAutista/auto-mcgraw-unfucked/releases)
 
 *Automate your McGraw Hill Smartbook homework with AI integration (ChatGPT, Gemini & DeepSeek)*
 
-[Installation](#installation) • [Usage](#usage) • [Settings](#settings) • [Issues](#issues)
+[Installation](#installation) • [Usage](#usage) • [Settings](#settings) • [Privacy](#privacy) • [Issues](#issues)
 
 </div>
 
@@ -23,17 +23,29 @@
 
 ## Public Service Announcement
 
-**⚠️ Auto-McGraw is not published on the Chrome Web Store.** This GitHub repository is the only official place to download the extension. We've seen fraudulent/unofficial reuploads of Auto-McGraw appear on the Chrome Web Store — these are not affiliated with this project and we cannot vouch for their safety or integrity. Only install from this repository's [releases page](https://github.com/GooglyBlox/auto-mcgraw/releases).
+**⚠️ Auto-McGraw is not published on the Chrome Web Store.** This GitHub repository is the only official place to download the extension. We've seen fraudulent/unofficial reuploads of Auto-McGraw appear on the Chrome Web Store — these are not affiliated with this project and we cannot vouch for their safety or integrity. Only install from this repository's [releases page](https://github.com/LaAutista/auto-mcgraw-unfucked/releases).
 
 ---
 
 ## Installation
 
-1. Download the latest zip from the [releases page](https://github.com/GooglyBlox/auto-mcgraw/releases)
+### Brave or Chrome
+
+1. Download `auto-mcgraw-brave-chrome.zip` from the [releases page](https://github.com/LaAutista/auto-mcgraw-unfucked/releases)
 2. Extract the zip file to a folder
-3. Open Chrome and go to `chrome://extensions/`
+3. Open `brave://extensions/` or `chrome://extensions/`
 4. Enable "Developer mode" in the top right
 5. Click "Load unpacked" and select the extracted folder
+
+### Firefox
+
+1. Download `auto-mcgraw-firefox-unsigned.xpi` from the [releases page](https://github.com/LaAutista/auto-mcgraw-unfucked/releases)
+2. Open `about:debugging#/runtime/this-firefox`
+3. Click "Load Temporary Add-on" and select the XPI
+
+The temporary Firefox installation lasts until Firefox restarts. Permanent
+installation in standard Firefox requires a Mozilla-signed XPI. Firefox 140 or
+newer is required.
 
 ## Usage
 
@@ -64,6 +76,14 @@ Click the settings icon ( <img src="assets/settings-icon.svg" alt="Settings Icon
 
 The extension will automatically use your selected AI model for all future automation sessions.
 
+## Privacy
+
+Auto-McGraw reads visible assignment content and sends it to the AI service you
+select by entering it in that service's browser tab. It does not send data to
+LaAutista or use an analytics server. Extension settings are stored with the
+browser's sync storage. The selected AI service's privacy policy applies to the
+content sent to it.
+
 ## Disclaimer
 
 This tool is for educational purposes only. Use it responsibly and be aware of your institution's academic integrity policies.
@@ -74,4 +94,4 @@ Any third-party names, trademarks, logos, assets, or likenesses referenced or di
 
 ## Issues
 
-Found a bug? [Create an issue](https://github.com/GooglyBlox/auto-mcgraw/issues).
+Found a bug? [Create an issue](https://github.com/LaAutista/auto-mcgraw-unfucked/issues).

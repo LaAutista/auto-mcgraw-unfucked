@@ -3,7 +3,7 @@
   "name": "Auto-McGraw Smartbook",
   "version": "2.5",
   "description": "Transfers a question from MHEducation's Smartbook to AI assistants and then uses their response to auto‐select an answer.",
-  "permissions": ["tabs", "scripting", "storage"],
+  "permissions": ["tabs", "storage"],
   "host_permissions": [
     "https://learning.mheducation.com/*",
     "https://ezto.mheducation.com/*",
@@ -18,10 +18,20 @@
     "https://api.github.com/*"
   ],
   "background": {
+    "scripts": ["background/background.js"],
     "service_worker": "background/background.js"
   },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "auto-mcgraw-unfucked@laautista.github.io",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": ["websiteContent"]
+      }
+    }
+  },
   "icons": {
-    "48": "assets/icon.png"
+    "512": "assets/icon.png"
   },
   "action": {
     "default_popup": "popup/settings.html",
@@ -52,16 +62,6 @@
       "matches": ["https://sfc.muzzylane.com/*"],
       "js": ["content-scripts/muzzylane.js"],
       "all_frames": true
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "popup/settings.html",
-        "popup/settings.css",
-        "popup/settings.js"
-      ],
-      "matches": ["<all_urls>"]
     }
   ]
 }

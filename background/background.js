@@ -10,6 +10,7 @@ let originalTabId = null;
 let storedResponse = null;
 let isProcessingDuplicate = false;
 let pendingResponse = null;
+const promiseApi = globalThis.browser ?? chrome;
 const DEEPSEEK_URL_PATTERNS = [
   "https://chat.deepseek.com/*",
 ];
@@ -49,15 +50,15 @@ async function focusTab(tabId) {
   if (!tabId) return false;
 
   try {
-    const tab = await chrome.tabs.get(tabId);
+    const tab = await promiseApi.tabs.get(tabId);
 
     if (tab.windowId === chrome.windows.WINDOW_ID_CURRENT) {
-      await chrome.tabs.update(tabId, { active: true });
+      await promiseApi.tabs.update(tabId, { active: true });
       return true;
     }
 
-    await chrome.windows.update(tab.windowId, { focused: true });
-    await chrome.tabs.update(tabId, { active: true });
+    await promiseApi.windows.update(tab.windowId, { focused: true });
+    await promiseApi.tabs.update(tabId, { active: true });
     return true;
   } catch (error) {
     return false;
@@ -65,7 +66,7 @@ async function focusTab(tabId) {
 }
 
 async function findAndStoreTabs() {
-  const mheTabs = await chrome.tabs.query({
+  const mheTabs = await promiseApi.tabs.query({
     url: [
       "https://learning.mheducation.com/*",
       "https://ezto.mheducation.com/*",
@@ -78,12 +79,12 @@ async function findAndStoreTabs() {
     mheWindowId = mheTabs[0].windowId;
   }
 
-  const data = await chrome.storage.sync.get("aiModel");
+  const data = await promiseApi.storage.sync.get("aiModel");
   const aiModel = data.aiModel || "chatgpt";
   aiType = aiModel;
 
   if (aiModel === "chatgpt") {
-    const tabs = await chrome.tabs.query({ url: "https://chatgpt.com/*" });
+    const tabs = await promiseApi.tabs.query({ url: "https://chatgpt.com/*" });
     if (tabs.length > 0) {
       aiTabId = tabs[0].id;
       aiWindowId = tabs[0].windowId;
@@ -91,7 +92,7 @@ async function findAndStoreTabs() {
       aiTabId = null;
     }
   } else if (aiModel === "gemini") {
-    const tabs = await chrome.tabs.query({
+    const tabs = await promiseApi.tabs.query({
       url: "https://gemini.google.com/*",
     });
     if (tabs.length > 0) {
@@ -101,7 +102,7 @@ async function findAndStoreTabs() {
       aiTabId = null;
     }
   } else if (aiModel === "deepseek") {
-    const tabs = await chrome.tabs.query({
+    const tabs = await promiseApi.tabs.query({
       url: DEEPSEEK_URL_PATTERNS,
     });
     if (tabs.length > 0) {
@@ -207,7 +208,7 @@ async function processResponse(message) {
     }
 
     if (!mheTabId) {
-      const mheTabs = await chrome.tabs.query({
+      const mheTabs = await promiseApi.tabs.query({
         url: [
           "https://learning.mheducation.com/*",
           "https://ezto.mheducation.com/*",
@@ -242,11 +243,11 @@ async function processResponse(message) {
 async function waitForTabReady(tabId, maxAttempts = 8) {
   for (let i = 0; i < maxAttempts; i++) {
     try {
-      await chrome.tabs.get(tabId);
+      await promiseApi.tabs.get(tabId);
 
       await sendMessageWithRetry(tabId, { type: "ping" }, 1, 300);
 
-      const tab = await chrome.tabs.get(tabId);
+      const tab = await promiseApi.tabs.get(tabId);
       if (tab.status === "complete") {
         await new Promise((resolve) => setTimeout(resolve, 300));
         return true;

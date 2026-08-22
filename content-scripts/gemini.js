@@ -1,4 +1,5 @@
 console.log("[Auto-McGraw][gemini] content script LOADED — marker v2");
+const promiseApi = globalThis.browser ?? chrome;
 let hasResponded = false;
 let currentQuestionSignature = null;
 let messageCountAtQuestion = 0;
@@ -148,13 +149,6 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
 // Poll for a selector instead of guessing a fixed delay. Resolves with the
 // element once it appears, or null on timeout.
 function waitForSelector(selector, timeout = 12000, interval = 150) {
@@ -172,8 +166,9 @@ function waitForSelector(selector, timeout = 12000, interval = 150) {
 
 function setComposerText(inputArea, text) {
   inputArea.focus();
-  // Escape so characters like "<" arrive as text instead of breaking the HTML.
-  inputArea.innerHTML = `<p>${escapeHtml(text)}</p>`;
+  const paragraph = document.createElement("p");
+  paragraph.textContent = String(text);
+  inputArea.replaceChildren(paragraph);
   inputArea.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
@@ -283,7 +278,7 @@ function tryHandleResponse() {
 
   hasResponded = true;
   console.log("[Auto-McGraw][gemini] sending answer back:", responseText);
-  chrome.runtime
+  promiseApi.runtime
     .sendMessage({
       type: "geminiResponse",
       response: responseText,

@@ -1,4 +1,5 @@
 console.log("[Auto-McGraw][deepseek] content script LOADED — marker v2");
+const promiseApi = globalThis.browser ?? chrome;
 let hasResponded = false;
 let currentQuestionSignature = null;
 let messageCountAtQuestion = 0;
@@ -370,7 +371,7 @@ function tryHandleResponse() {
 
   hasResponded = true;
   console.log("[Auto-McGraw][deepseek] sending answer back:", responseText);
-  chrome.runtime
+  promiseApi.runtime
     .sendMessage({
       type: "deepseekResponse",
       response: responseText,

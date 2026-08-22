@@ -4,6 +4,7 @@ import vm from "node:vm";
 
 const read = (file) =>
   readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+const manifest = JSON.parse(read("manifest.json"));
 const response = '{"answer":"same","explanation":"same"}';
 const providers = [
   ["chatgpt.js", '[data-message-author-role="assistant"]'],
@@ -71,5 +72,21 @@ assert.match(mhe, /matchedChoices\.every\(Boolean\)/);
 
 const muzzy = read("content-scripts/muzzylane.js");
 assert.match(muzzy, /message\.type === "stopAutomation"[\s\S]*stopAutomation\(\)/);
+
+assert.equal(manifest.background.service_worker, "background/background.js");
+assert.deepEqual(manifest.background.scripts, ["background/background.js"]);
+assert.equal(
+  manifest.browser_specific_settings.gecko.id,
+  "auto-mcgraw-unfucked@laautista.github.io"
+);
+assert.equal(
+  manifest.browser_specific_settings.gecko.strict_min_version,
+  "140.0"
+);
+assert.deepEqual(
+  manifest.browser_specific_settings.gecko.data_collection_permissions.required,
+  ["websiteContent"]
+);
+assert.doesNotMatch(background, /await chrome\./);
 
 console.log("regressions: ok");

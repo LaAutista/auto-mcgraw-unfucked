@@ -15,7 +15,7 @@ jobs:
       has_changed: ${{ steps.version-check.outputs.has_changed }}
       last_tag: ${{ steps.get-latest-tag.outputs.tag }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       
@@ -49,7 +49,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -66,9 +66,12 @@ jobs:
           echo "$CHANGELOG" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Create zip file
+      - name: Test
+        run: node tests/regressions.test.mjs
+
+      - name: Create browser packages
         run: |
-          zip -r auto-mcgraw.zip \
+          zip -r auto-mcgraw-brave-chrome.zip \
             manifest.json \
             LICENSE \
             assets/icon.png \
@@ -76,18 +79,24 @@ jobs:
             background \
             content-scripts \
             popup
+          cp auto-mcgraw-brave-chrome.zip auto-mcgraw-firefox-unsigned.xpi
 
       - name: Create Release
         id: create_release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.check-version.outputs.version }}
           name: Release v${{ needs.check-version.outputs.version }}
           body: |
+            Download `auto-mcgraw-brave-chrome.zip` for Brave or Chrome.
+            The Firefox XPI is unsigned and intended for temporary loading through `about:debugging`; standard Firefox requires Mozilla signing for permanent installation.
+
             Changes in this release:
             
             ${{ steps.changelog.outputs.CHANGELOG }}
-          files: auto-mcgraw.zip
+          files: |
+            auto-mcgraw-brave-chrome.zip
+            auto-mcgraw-firefox-unsigned.xpi
           draft: false
           prerelease: false
         env:
