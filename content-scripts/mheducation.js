@@ -264,8 +264,7 @@ function fillInAnswers(answers, container) {
     container.querySelectorAll('input[type="radio"], input[type="checkbox"]')
   );
   const getChoiceText = (choice) =>
-    choice.closest("label")?.querySelector(".choiceText")?.textContent.trim() ||
-    "";
+    getElementText(choice.closest("label")?.querySelector(".choiceText"));
 
   if (
     !answers.every((answer) =>
@@ -340,19 +339,18 @@ function getQuestionSignature(container) {
 
   const questionType = detectQuestionType(container);
   if (questionType === "matching") {
-    const promptText =
-      container.querySelector(".prompt")?.textContent?.trim() || "";
+    const promptText = getElementText(container.querySelector(".prompt"));
     const prompts = Array.from(
       container.querySelectorAll(".match-prompt .content")
     )
-      .map((el) => normalizeChoiceText(el.textContent))
+      .map((el) => normalizeChoiceText(getElementText(el)))
       .filter(Boolean)
       .join("|");
 
     return `${questionType}::${normalizeChoiceText(promptText)}::${prompts}`;
   }
 
-  const promptText = container.querySelector(".prompt")?.textContent?.trim() || "";
+  const promptText = getElementText(container.querySelector(".prompt"));
 
   return `${questionType}::${normalizeChoiceText(promptText)}`;
 }
@@ -489,6 +487,22 @@ function detectQuestionType(container) {
   return "";
 }
 
+function getElementText(element) {
+  if (!element) return "";
+
+  function readNode(node) {
+    if (node.nodeType === 3) return node.textContent || "";
+
+    const text = Array.from(node.childNodes || [], readNode).join("");
+    const tagName = node.nodeName?.toLowerCase();
+    if (tagName === "sup") return `^${text}`;
+    if (tagName === "sub") return `_${text}`;
+    return text;
+  }
+
+  return readNode(element).trim();
+}
+
 function normalizeChoiceText(text) {
   if (typeof text !== "string") return "";
 
@@ -572,9 +586,9 @@ function extractCorrectAnswer() {
       input.parentNode.replaceChild(blankMarker, input);
     });
 
-    questionText = promptClone.textContent.trim();
+    questionText = getElementText(promptClone);
   } else {
-    questionText = promptEl ? promptEl.textContent.trim() : "";
+    questionText = getElementText(promptEl);
   }
 
   let correctAnswer = null;
@@ -585,7 +599,7 @@ function extractCorrectAnswer() {
         ".answer-container .choiceText"
       );
       if (answerContainer) {
-        correctAnswer = answerContainer.textContent.trim();
+        correctAnswer = getElementText(answerContainer);
       } else {
         const correctAnswerContainer = container.querySelector(
           ".correct-answer-container"
@@ -594,11 +608,11 @@ function extractCorrectAnswer() {
           const answerText =
             correctAnswerContainer.querySelector(".choiceText");
           if (answerText) {
-            correctAnswer = answerText.textContent.trim();
+            correctAnswer = getElementText(answerText);
           } else {
             const answerDiv = correctAnswerContainer.querySelector(".choice");
             if (answerDiv) {
-              correctAnswer = answerDiv.textContent.trim();
+              correctAnswer = getElementText(answerDiv);
             }
           }
         }
@@ -615,8 +629,8 @@ function extractCorrectAnswer() {
         correctAnswer = Array.from(correctAnswersList).map((el) => {
           const choiceText = el.querySelector(".choiceText");
           return choiceText
-            ? choiceText.textContent.trim()
-            : el.textContent.trim();
+            ? getElementText(choiceText)
+            : getElementText(el);
         });
       }
     } catch (e) {
@@ -631,9 +645,9 @@ function extractCorrectAnswer() {
           const correctAnswerEl =
             correctAnswersList[0].querySelector(".correct-answer");
           if (correctAnswerEl) {
-            correctAnswer = correctAnswerEl.textContent.trim();
+            correctAnswer = getElementText(correctAnswerEl);
           } else {
-            const answerText = correctAnswersList[0].textContent.trim();
+            const answerText = getElementText(correctAnswersList[0]);
             if (answerText) {
               const match = answerText.match(/:\s*(.+)$/);
               correctAnswer = match ? match[1].trim() : answerText;
@@ -643,9 +657,9 @@ function extractCorrectAnswer() {
           correctAnswer = Array.from(correctAnswersList).map((field) => {
             const correctAnswerEl = field.querySelector(".correct-answer");
             if (correctAnswerEl) {
-              return correctAnswerEl.textContent.trim();
+              return getElementText(correctAnswerEl);
             } else {
-              const answerText = field.textContent.trim();
+              const answerText = getElementText(field);
               const match = answerText.match(/:\s*(.+)$/);
               return match ? match[1].trim() : answerText;
             }
@@ -662,7 +676,7 @@ function extractCorrectAnswer() {
           ".correct-answer-container .choice.-interactive, .correct-answer-container .choiceText, .correct-answer-container .choice"
         )
       )
-        .map((el) => el.textContent.trim())
+        .map((el) => getElementText(el))
         .filter(Boolean);
 
       if (correctAnswersList.length === 1) {
@@ -813,12 +827,12 @@ function getQuestionChoices(container, questionType) {
     return Array.from(
       container.querySelectorAll(".select-text-component .choice.-interactive")
     )
-      .map((el) => el.textContent.trim())
+      .map((el) => getElementText(el))
       .filter(Boolean);
   }
 
   return Array.from(container.querySelectorAll(".choiceText"))
-    .map((el) => el.textContent.trim())
+    .map((el) => getElementText(el))
     .filter(Boolean);
 }
 
@@ -888,7 +902,7 @@ function getMatchingPromptText(matchRow) {
   const promptContent =
     matchRow.querySelector(".match-prompt .content") ||
     matchRow.querySelector(".match-prompt");
-  const rawText = promptContent ? promptContent.textContent : "";
+  const rawText = getElementText(promptContent);
   return normalizeChoiceText(rawText || "");
 }
 
@@ -897,7 +911,7 @@ function getMatchingChoiceText(choiceItem) {
 
   const contentEl =
     choiceItem.querySelector(".content") || choiceItem.querySelector("p");
-  const rawText = contentEl ? contentEl.textContent : choiceItem.textContent;
+  const rawText = getElementText(contentEl || choiceItem);
   return normalizeChoiceText(rawText || "");
 }
 
@@ -1609,7 +1623,7 @@ async function processChatGPTResponse(responseText) {
     if (
       !answers.every((answer) =>
         choices.some((choice) =>
-          isAnswerMatch(choice.textContent.trim(), answer)
+          isAnswerMatch(getElementText(choice), answer)
         )
       )
     ) {
@@ -1619,7 +1633,7 @@ async function processChatGPTResponse(responseText) {
 
     let filledCount = 0;
     choices.forEach((choice) => {
-      const choiceText = choice.textContent.trim();
+      const choiceText = getElementText(choice);
       if (!choiceText) return;
 
       const shouldBeSelected = answers.some((ans) =>
@@ -1816,9 +1830,9 @@ function parseQuestion() {
       }
     });
 
-    questionText = promptClone.textContent.trim();
+    questionText = getElementText(promptClone);
   } else {
-    questionText = promptEl ? promptEl.textContent.trim() : "";
+    questionText = getElementText(promptEl);
   }
 
   let options = [];
@@ -1836,11 +1850,11 @@ function parseQuestion() {
     options = Array.from(
       container.querySelectorAll(".select-text-component .choice.-interactive")
     )
-      .map((el) => el.textContent.trim())
+      .map((el) => getElementText(el))
       .filter(Boolean);
   } else if (questionType !== "fill_in_the_blank") {
     container.querySelectorAll(".choiceText").forEach((el) => {
-      options.push(el.textContent.trim());
+      options.push(getElementText(el));
     });
   }
 

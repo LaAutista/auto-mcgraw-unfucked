@@ -154,6 +154,108 @@ const mhe = read("content-scripts/mheducation.js");
 assert.doesNotMatch(mhe, /normalizedAnswer\.includes\(normalizedChoice\)/);
 assert.match(mhe, /matchedChoices\.every\(Boolean\)/);
 
+function testMathTextRoundTrip() {
+  const textNode = (text) => ({
+    nodeType: 3,
+    nodeName: "#text",
+    childNodes: [],
+    textContent: text,
+  });
+  const elementNode = (nodeName, ...childNodes) => {
+    const node = { nodeType: 1, nodeName: nodeName.toUpperCase(), childNodes };
+    Object.defineProperty(node, "textContent", {
+      get: () => childNodes.map((child) => child.textContent).join(""),
+    });
+    return node;
+  };
+  const power = (base, exponent, prefix = "") =>
+    elementNode(
+      "span",
+      textNode(prefix + base),
+      elementNode("sup", textNode(exponent))
+    );
+
+  const prompt = elementNode(
+    "span",
+    textNode("1 × 10"),
+    elementNode("sup", textNode("7")),
+    textNode(" = ______")
+  );
+  const options = [
+    power("10", "7"),
+    power("10", "8"),
+    power("10", "6", "10 × "),
+    power("10", "7", "10 × "),
+  ];
+  const inputs = options.map((option) => ({
+    checked: false,
+    click() {
+      this.checked = true;
+    },
+    closest: () => ({ querySelector: () => option }),
+  }));
+  const container = {
+    querySelector(selector) {
+      if (selector === ".awd-probe-type-multiple_select") return {};
+      if (selector === ".prompt") return prompt;
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === ".choiceText") return options;
+      if (selector.includes('input[type="radio"]')) return inputs;
+      return [];
+    },
+  };
+  const context = vm.createContext({
+    console: { log() {}, warn() {}, error() {} },
+    alert() {},
+    confirm: () => false,
+    setInterval: () => 1,
+    clearInterval() {},
+    setTimeout: () => 1,
+    clearTimeout() {},
+    document: {
+      querySelector: (selector) =>
+        selector === ".probe-container" ? container : null,
+    },
+    chrome: {
+      storage: {
+        sync: { get: (_keys, callback) => callback({}) },
+        onChanged: { addListener() {} },
+      },
+      runtime: {
+        onMessage: { addListener() {}, removeListener() {} },
+        sendMessage() {},
+      },
+    },
+  });
+
+  vm.runInContext(mhe, context, { filename: "mheducation.js" });
+  const parsed = JSON.parse(
+    vm.runInContext("JSON.stringify(parseQuestion())", context)
+  );
+  assert.deepEqual(parsed, {
+    type: "multiple_select",
+    question: "1 × 10^7 = ______",
+    options: ["10^7", "10^8", "10 × 10^6", "10 × 10^7"],
+    previousCorrection: null,
+  });
+
+  assert.equal(
+    vm.runInContext(
+      'fillInAnswers(["10^7", "10 × 10^6"], document.querySelector(".probe-container"))',
+      context
+    ),
+    2
+  );
+  assert.deepEqual(
+    inputs.map((input) => input.checked),
+    [true, false, true, false]
+  );
+}
+
+testMathTextRoundTrip();
+
 const muzzy = read("content-scripts/muzzylane.js");
 assert.match(muzzy, /message\.type === "stopAutomation"[\s\S]*stopAutomation\(\)/);
 
