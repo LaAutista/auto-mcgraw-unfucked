@@ -2,6 +2,8 @@ let mheTabId = null;
 let aiTabId = null;
 let aiType = null;
 let processingQuestion = false;
+let queuedRestart = null;
+let allowQueuedRestart = false;
 let mheWindowId = null;
 let aiWindowId = null;
 let duplicateTabId = null;
@@ -109,8 +111,12 @@ async function shouldFocusTabs() {
 }
 
 async function processQuestion(message) {
-  if (processingQuestion) return;
+  if (processingQuestion) {
+    if (allowQueuedRestart) queuedRestart = message;
+    return;
+  }
   processingQuestion = true;
+  allowQueuedRestart = false;
 
   try {
     await findAndStoreTabs(message.sourceWindowId);
@@ -119,14 +125,15 @@ async function processQuestion(message) {
     const returnTabId = mheTabId;
 
     if (!aiTabId) {
-      await sendMessageWithRetry(mheTabId, {
-        type: "alertMessage",
-        message: `Please open ${aiType} in another tab before using automation.`,
-      });
-      await sendMessageWithRetry(mheTabId, {
-        type: "stopAutomation",
-      });
-      processingQuestion = false;
+      if (!allowQueuedRestart && !queuedRestart) {
+        await sendMessageWithRetry(mheTabId, {
+          type: "alertMessage",
+          message: `Please open ${aiType} in another tab before using automation.`,
+        });
+      }
+      if (!allowQueuedRestart && !queuedRestart) {
+        await sendMessageWithRetry(mheTabId, { type: "stopAutomation" });
+      }
       return;
     }
 
@@ -139,17 +146,25 @@ async function processQuestion(message) {
 
     const aiResponse = await sendMessageWithRetry(aiTabId, {
       type: "receiveQuestion",
+      requestId: crypto.randomUUID(),
       question: message.question,
     });
 
-    if (aiResponse && aiResponse.received === false) {
+    if (
+      aiResponse &&
+      aiResponse.received === false &&
+      !allowQueuedRestart &&
+      !queuedRestart
+    ) {
       await sendMessageWithRetry(mheTabId, {
         type: "alertMessage",
         message: `Could not enter the question into ${aiType}: ${
           aiResponse.error || "unknown error"
         }. Check the ${aiType} tab.`,
       });
-      await sendMessageWithRetry(mheTabId, { type: "stopAutomation" });
+      if (!allowQueuedRestart && !queuedRestart) {
+        await sendMessageWithRetry(mheTabId, { type: "stopAutomation" });
+      }
     }
 
     if (
@@ -160,17 +175,22 @@ async function processQuestion(message) {
       await focusTab(returnTabId);
     }
   } catch (error) {
-    if (mheTabId) {
+    if (mheTabId && !allowQueuedRestart && !queuedRestart) {
       await sendMessageWithRetry(mheTabId, {
         type: "alertMessage",
         message: `Error communicating with ${aiType}. Please make sure it's open in another tab.`,
       });
-      await sendMessageWithRetry(mheTabId, {
-        type: "stopAutomation",
-      });
+      if (!allowQueuedRestart && !queuedRestart) {
+        await sendMessageWithRetry(mheTabId, { type: "stopAutomation" });
+      }
     }
   } finally {
     processingQuestion = false;
+    if (queuedRestart) {
+      const nextQuestion = queuedRestart;
+      queuedRestart = null;
+      void processQuestion(nextQuestion);
+    }
   }
 }
 
@@ -352,6 +372,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "resetTabTracking") {
+    queuedRestart = null;
+    allowQueuedRestart = true;
     duplicateTabId = null;
     originalTabId = null;
     storedResponse = null;

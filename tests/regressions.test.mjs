@@ -26,6 +26,8 @@ for (const [file, messageSelector] of providers) {
   const context = vm.createContext({
     console: { log() {}, warn() {}, error() {} },
     document: {
+      getElementById: () => ({}),
+      querySelector: () => ({}),
       querySelectorAll: (selector) =>
         selector === messageSelector ? messages : [],
     },
@@ -41,12 +43,70 @@ for (const [file, messageSelector] of providers) {
   });
 
   vm.runInContext(read(`content-scripts/${file}`), context, { filename: file });
-  vm.runInContext("insertQuestion = () => Promise.resolve()", context);
+  vm.runInContext(
+    `submitToComposer = (_input, text) => {
+       globalThis.promptText = text;
+       return Promise.resolve();
+     };
+     startObserving = () => {};
+     if (typeof waitForIdle === "function") waitForIdle = () => Promise.resolve();
+     if (typeof findChatInput === "function") findChatInput = () => ({});`,
+    context
+  );
+
+  await vm.runInContext(
+    `insertQuestion(${JSON.stringify({
+      type: "multiple_select",
+      question: "1 × 10^7 = ______",
+      options: ["10^7", "10^8", "10 × 10^6", "10 × 10^7"],
+    })})`,
+    context
+  );
+  assert.match(context.promptText, /select all that apply/i, `${file}: select-all prompt`);
+  assert.match(context.promptText, /array containing ALL/, `${file}: array prompt`);
+
+  await vm.runInContext(
+    `insertQuestion(${JSON.stringify({
+      type: "multiple_choice",
+      question: "Choose 107",
+      options: ["107", "108"],
+    })})`,
+    context
+  );
+  assert.doesNotMatch(context.promptText, /Do not include numbers/);
+  assert.match(context.promptText, /preserve all numbers in the option text/);
+
+  vm.runInContext(
+    `globalThis.submissions = 0;
+     insertQuestion = () => {
+       submissions++;
+       return Promise.resolve();
+     };`,
+    context
+  );
+  const questionMessage = {
+    type: "receiveQuestion",
+    requestId: "request-1",
+    question: { question: "test" },
+  };
   listener(
-    { type: "receiveQuestion", question: { question: "test" } },
+    questionMessage,
     {},
     () => {}
   );
+  assert.equal(context.submissions, 1, `${file}: initial submission`);
+
+  let duplicateResponse;
+  listener(questionMessage, {}, (reply) => (duplicateResponse = reply));
+  assert.equal(context.submissions, 1, `${file}: duplicated a transport retry`);
+  assert.equal(duplicateResponse.status, "already-processing");
+
+  listener(
+    { ...questionMessage, requestId: "request-2" },
+    {},
+    () => {}
+  );
+  assert.equal(context.submissions, 2, `${file}: blocked a Stop/Start retry`);
 
   vm.runInContext("tryHandleResponse()", context);
   assert.equal(sent.length, 0, `${file}: accepted the stale message`);
@@ -66,11 +126,21 @@ assert.doesNotMatch(background, /lastActiveTabId/);
 async function testTabSwitching() {
   let tabSwitchingEnabled;
   let onActivated;
+  let backgroundListener;
+  let failNextAiRequest = false;
   let aiTabs = [{ id: 22, windowId: 7 }];
   const updatedTabs = [];
+  const aiRequests = [];
+  const mheMessages = [];
   const delayed = [];
   const context = vm.createContext({
     console: { log() {}, warn() {}, error() {} },
+    crypto: {
+      randomUUID: (() => {
+        let nextId = 0;
+        return () => `request-${++nextId}`;
+      })(),
+    },
     setTimeout(callback, delay) {
       if (delay === 1000) delayed.push(callback);
       else callback();
@@ -89,8 +159,18 @@ async function testTabSwitching() {
           // Reproduce the v2.5 self-activation race if its listener returns.
           onActivated?.({ tabId: id });
         },
-        sendMessage: (_id, _message, callback) =>
-          callback({ received: true }),
+        sendMessage: (id, message, callback) => {
+          if (id === 22 && message.type === "receiveQuestion") {
+            aiRequests.push(message);
+            if (failNextAiRequest) {
+              failNextAiRequest = false;
+              callback({ received: false, error: "test failure" });
+              return;
+            }
+          }
+          if (id === 11) mheMessages.push(message);
+          callback({ received: true });
+        },
       },
       storage: {
         sync: {
@@ -103,7 +183,7 @@ async function testTabSwitching() {
       },
       runtime: {
         lastError: null,
-        onMessage: { addListener() {} },
+        onMessage: { addListener: (fn) => (backgroundListener = fn) },
       },
     },
   });
@@ -142,6 +222,36 @@ async function testTabSwitching() {
   tabSwitchingEnabled = true;
   await vm.runInContext("processResponse({ response: 'r' })", context);
   assert.deepEqual(updatedTabs, [11], "response switching re-enabled");
+
+  assert.equal(
+    new Set(aiRequests.map(({ requestId }) => requestId)).size,
+    aiRequests.length
+  );
+
+  const requestCount = aiRequests.length;
+  const mheMessageCount = mheMessages.length;
+  failNextAiRequest = true;
+  const firstRun = vm.runInContext(
+    "processQuestion({ sourceTabId: 11, sourceWindowId: 7, question: 'first' })",
+    context
+  );
+  backgroundListener({ type: "resetTabTracking" }, {}, () => {});
+  await vm.runInContext(
+    "processQuestion({ sourceTabId: 11, sourceWindowId: 7, question: 'restarted' })",
+    context
+  );
+  await firstRun;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    aiRequests.slice(requestCount).map(({ question }) => question),
+    ["first", "restarted"],
+    "Stop/Start restart was dropped while a question was in flight"
+  );
+  assert.equal(
+    mheMessages.slice(mheMessageCount).some(({ type }) => type === "stopAutomation"),
+    false,
+    "the failed old request stopped the queued restart"
+  );
 }
 
 await testTabSwitching();

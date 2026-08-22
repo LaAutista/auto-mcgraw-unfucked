@@ -1,7 +1,7 @@
 console.log("[Auto-McGraw][gemini] content script LOADED — marker v2");
 const promiseApi = globalThis.browser ?? chrome;
 let hasResponded = false;
-let currentQuestionSignature = null;
+let activeRequestId = null;
 let messageCountAtQuestion = 0;
 let observationStartTime = 0;
 let observationTimeout = null;
@@ -10,16 +10,15 @@ let pollIntervalId = null;
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "receiveQuestion") {
-    const signature = JSON.stringify(message.question);
+    const requestId = message.requestId || JSON.stringify(message.question);
 
-    // The background script retries sends; ignore a duplicate of the question
-    // we're already working on so it can't corrupt our "prior answer" baseline.
-    if (currentQuestionSignature === signature && pollIntervalId && !hasResponded) {
+    // Retry sends reuse an ID; a Stop/Start attempt gets a fresh one.
+    if (activeRequestId === requestId) {
       sendResponse({ received: true, status: "already-processing" });
       return true;
     }
 
-    currentQuestionSignature = signature;
+    activeRequestId = requestId;
     resetObservation();
 
     messageCountAtQuestion = document.querySelectorAll("model-response").length;
@@ -119,7 +118,7 @@ async function insertQuestion(questionData) {
       options.map((opt, i) => `${i + 1}. ${opt}`).join("\n");
     text +=
       '\n\nThis is a ranking question. Set "answer" to an array containing ALL of the above items in the correct order from first to last. Use the exact item text.';
-  } else if (type === "multiple_response") {
+  } else if (type === "multiple_response" || type === "multiple_select") {
     text +=
       "\nOptions:\n" +
       options.map((opt, i) => `${i + 1}. ${opt}`).join("\n");
@@ -129,7 +128,7 @@ async function insertQuestion(questionData) {
     text +=
       "\nOptions:\n" + options.map((opt, i) => `${i + 1}. ${opt}`).join("\n");
     text +=
-       "\n\nIMPORTANT: Your answer must EXACTLY match the above options. Do not include numbers in your answer. If there are periods, include them. If there are multiple selections, include all of the correct selections.";
+       "\n\nIMPORTANT: Your answer must EXACTLY match the above options. Omit only the numbered-list prefix; preserve all numbers in the option text. If there are periods, include them. If there are multiple selections, include all of the correct selections.";
   }
 
   text +=
