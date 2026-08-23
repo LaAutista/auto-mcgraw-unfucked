@@ -8,6 +8,7 @@ let pauseBeforeSubmit = false;
 let waitingForDuplicateCompletion = false;
 let currentResponse = null;
 let matchingPauseIntervalId = null;
+let activeQuestionRequestId = null;
 const LOG_PREFIX = "[Auto-McGraw][mhe]";
 
 chrome.storage.sync.get(["doubleCreditMode", "randomConfidence", "pauseBeforeSubmit"], function (data) {
@@ -55,18 +56,51 @@ function setupMessageListener() {
 
     if (message.type === "processChatGPTResponse") {
       if (
-        doubleCreditMode &&
         !message.isDuplicateTab &&
-        !waitingForDuplicateCompletion
+        (!isAutomating ||
+          !message.requestId ||
+          message.requestId !== activeQuestionRequestId)
       ) {
-        currentResponse = message.response;
-        processDoubleCreditResponse(message.response);
-      } else {
-        void processChatGPTResponse(message.response).catch((error) => {
-          handleProcessResponseError(error);
-        });
+        sendResponse({ received: false, stale: true });
+        return true;
       }
-      sendResponse({ received: true });
+      if (
+        !message.isDuplicateTab &&
+        !document.querySelector(".probe-container")
+      ) {
+        sendResponse({ received: false, error: "Question container not ready" });
+        return true;
+      }
+
+      let processing;
+      try {
+        if (
+          doubleCreditMode &&
+          !message.isDuplicateTab &&
+          !waitingForDuplicateCompletion
+        ) {
+          currentResponse = message.response;
+          processing = processDoubleCreditResponse(message.response);
+        } else {
+          processing = processChatGPTResponse(message.response);
+        }
+      } catch (error) {
+        if (!error.retryable) handleProcessResponseError(error);
+        sendResponse({ received: false, error: error.message });
+        return true;
+      }
+
+      Promise.resolve(processing)
+        .then(() => {
+          if (message.requestId === activeQuestionRequestId) {
+            activeQuestionRequestId = null;
+          }
+          sendResponse({ received: true });
+        })
+        .catch((error) => {
+          if (!error.retryable) handleProcessResponseError(error);
+          sendResponse({ received: false, error: error.message });
+        });
       return true;
     }
 
@@ -90,6 +124,7 @@ function setupMessageListener() {
 
     if (message.type === "stopAutomation") {
       isAutomating = false;
+      activeQuestionRequestId = null;
       clearMatchingPauseWatcher();
       updateButtonState();
       sendResponse({ received: true });
@@ -140,9 +175,13 @@ function processDoubleCreditResponse(responseText) {
     const container = document.querySelector(".probe-container");
     if (!container) return;
 
-    if (container.querySelector(".awd-probe-type-matching")) {
+    if (
+      container.querySelector(
+        ".awd-probe-type-matching, .awd-probe-type-sortable"
+      )
+    ) {
       alert(
-        "Matching questions are not supported in double credit mode. Please complete manually."
+        "Matching and ordering questions are not supported in double credit mode. Please complete manually."
       );
       isAutomating = false;
       updateButtonState();
@@ -271,21 +310,30 @@ function fillInAnswers(answers, container) {
       choices.some((choice) => isAnswerMatch(getChoiceText(choice), answer))
     )
   ) {
-    return 0;
+    return -1;
   }
 
   let filledCount = 0;
   choices.forEach((choice) => {
-    if (answers.some((answer) => isAnswerMatch(getChoiceText(choice), answer))) {
-      // Never re-click an already-checked box — that would toggle it off.
-      if (!choice.checked) {
-        choice.click();
-      }
-      filledCount++;
+    const shouldBeSelected = answers.some((answer) =>
+      isAnswerMatch(getChoiceText(choice), answer)
+    );
+    if (choice.type === "checkbox" && choice.checked !== shouldBeSelected) {
+      choice.click();
+    } else if (shouldBeSelected && !choice.checked) {
+      choice.click();
     }
+    if (shouldBeSelected && choice.checked) filledCount++;
   });
 
-  return filledCount;
+  const exactStateApplied = choices.every((choice) => {
+    const shouldBeSelected = answers.some((answer) =>
+      isAnswerMatch(getChoiceText(choice), answer)
+    );
+    return choice.checked === shouldBeSelected;
+  });
+
+  return exactStateApplied && filledCount === answers.length ? filledCount : 0;
 }
 
 function checkForCorrectAnswer(container) {
@@ -443,7 +491,7 @@ function handleForcedLearning() {
 }
 
 function checkForNextStep() {
-  if (!isAutomating) return;
+  if (!isAutomating || activeQuestionRequestId) return;
 
   if (handleTopicOverview()) {
     return;
@@ -457,8 +505,10 @@ function checkForNextStep() {
   if (container && !container.querySelector(".forced-learning")) {
     const qData = parseQuestion();
     if (qData) {
+      activeQuestionRequestId = crypto.randomUUID();
       chrome.runtime.sendMessage({
         type: "sendQuestionToChatGPT",
+        requestId: activeQuestionRequestId,
         question: qData,
       });
     }
@@ -484,17 +534,58 @@ function detectQuestionType(container) {
   if (container.querySelector(".awd-probe-type-matching")) {
     return "matching";
   }
+  if (container.querySelector(".awd-probe-type-sortable")) {
+    return "ranking";
+  }
   return "";
 }
 
 function getElementText(element) {
   if (!element) return "";
 
+  function readMathNode(node) {
+    if (node.nodeType === 3) return node.textContent || "";
+
+    const tagName = node.nodeName?.toLowerCase();
+    const children = Array.from(node.childNodes || []);
+    const parts = children.map(readMathNode);
+
+    if (tagName === "annotation" || tagName === "annotation-xml") return "";
+    if (tagName === "semantics") return parts.find(Boolean) || "";
+    if (tagName === "mfrac") return `${parts[0] || ""}/${parts[1] || ""}`;
+    if (tagName === "msup") return `${parts[0] || ""}^${parts[1] || ""}`;
+    if (tagName === "msub") return `${parts[0] || ""}_${parts[1] || ""}`;
+    if (tagName === "msubsup") {
+      return `${parts[0] || ""}_${parts[1] || ""}^${parts[2] || ""}`;
+    }
+    if (tagName === "msqrt") return `sqrt(${parts.join("")})`;
+    if (tagName === "mroot") {
+      return `root(${parts[0] || ""},${parts[1] || ""})`;
+    }
+
+    return parts.join("");
+  }
+
+  function hasClass(node, className) {
+    return node.classList?.contains?.(className) || false;
+  }
+
   function readNode(node) {
     if (node.nodeType === 3) return node.textContent || "";
 
-    const text = Array.from(node.childNodes || [], readNode).join("");
     const tagName = node.nodeName?.toLowerCase();
+    if (tagName === "script" || tagName === "style") return "";
+    if (hasClass(node, "MathJax_Preview")) return "";
+
+    if (hasClass(node, "MathJax")) {
+      const mathNode = node.querySelector?.(".MJX_Assistive_MathML math, math");
+      if (mathNode) return readMathNode(mathNode);
+    }
+
+    if (hasClass(node, "MJX_Assistive_MathML")) return "";
+    if (tagName === "math") return readMathNode(node);
+
+    const text = Array.from(node.childNodes || [], readNode).join("");
     if (tagName === "sup") return `^${text}`;
     if (tagName === "sub") return `_${text}`;
     return text;
@@ -932,6 +1023,75 @@ function getMatchingDragHandle(choiceItem) {
   return (
     choiceItem.querySelector("[data-react-beautiful-dnd-drag-handle]") ||
     choiceItem
+  );
+}
+
+function getSortableChoiceItems(container) {
+  return Array.from(
+    container.querySelectorAll(
+      ".sortable-component .vertical-list .choice-item[data-react-beautiful-dnd-draggable]"
+    )
+  );
+}
+
+async function applyRankingAnswer(container, rawAnswers) {
+  const answers = flattenAnswerValues(rawAnswers);
+  const initialTexts = getSortableChoiceItems(container).map((item) =>
+    getMatchingChoiceText(item)
+  );
+  if (answers.length !== initialTexts.length) return false;
+
+  const usedItemIndexes = new Set();
+  const targetOrder = answers.map((answer) => {
+    const matchIndex = initialTexts.findIndex(
+      (itemText, index) =>
+        !usedItemIndexes.has(index) && isAnswerMatch(itemText, answer)
+    );
+    if (matchIndex === -1) return "";
+    usedItemIndexes.add(matchIndex);
+    return initialTexts[matchIndex];
+  });
+  if (targetOrder.some((answer) => !answer)) return false;
+
+  for (let targetIndex = 0; targetIndex < targetOrder.length; targetIndex += 1) {
+    const items = getSortableChoiceItems(container);
+    const currentIndex = items.findIndex((item) =>
+      isAnswerMatch(getMatchingChoiceText(item), targetOrder[targetIndex])
+    );
+    if (currentIndex === -1) return false;
+    if (currentIndex === targetIndex) continue;
+    if (currentIndex < targetIndex) return false;
+
+    const handle = getMatchingDragHandle(items[currentIndex]);
+    if (!handle) return false;
+    try {
+      handle.focus({ preventScroll: true });
+    } catch (e) {
+      handle.focus();
+    }
+
+    dispatchKeyboardSequence(handle, " ", "Space", 32);
+    await delay(80);
+
+    for (let step = targetIndex; step < currentIndex; step += 1) {
+      dispatchKeyboardSequence(handle, "ArrowUp", "ArrowUp", 38);
+      await delay(70);
+    }
+
+    dispatchKeyboardSequence(handle, " ", "Space", 32);
+    await delay(120);
+
+    const movedItem = getSortableChoiceItems(container)[targetIndex];
+    if (!isAnswerMatch(getMatchingChoiceText(movedItem), targetOrder[targetIndex])) {
+      return false;
+    }
+  }
+
+  const finalTexts = getSortableChoiceItems(container).map((item) =>
+    getMatchingChoiceText(item)
+  );
+  return targetOrder.every((answer, index) =>
+    isAnswerMatch(finalTexts[index], answer)
   );
 }
 
@@ -1615,6 +1775,12 @@ async function processChatGPTResponse(responseText) {
 
       return;
     }
+  } else if (questionType === "ranking") {
+    const applied = await applyRankingAnswer(container, answers);
+    if (!applied) {
+      pauseForManualAnswer(container, answers);
+      return;
+    }
   } else if (questionType === "select_text") {
     const choices = Array.from(
       container.querySelectorAll(".select-text-component .choice.-interactive")
@@ -1652,9 +1818,14 @@ async function processChatGPTResponse(responseText) {
     }
   } else {
     const filledCount = fillInAnswers(answers, container);
-    if (filledCount === 0) {
+    if (filledCount < 0 || (questionType === "fill_in_the_blank" && filledCount === 0)) {
       pauseForManualAnswer(container, answers);
       return;
+    }
+    if (filledCount === 0) {
+      const error = new Error("Matched answer could not be applied yet");
+      error.retryable = true;
+      throw error;
     }
   }
 
@@ -1733,10 +1904,15 @@ function addAssistantButton() {
       btn.style.borderBottomRightRadius = "0";
       btn.addEventListener("click", () => {
         if (isAutomating) {
+          const stoppedRequestId = activeQuestionRequestId;
           isAutomating = false;
+          activeQuestionRequestId = null;
           waitingForDuplicateCompletion = false;
           clearMatchingPauseWatcher();
-          chrome.runtime.sendMessage({ type: "resetTabTracking" });
+          chrome.runtime.sendMessage({
+            type: "resetTabTracking",
+            requestId: stoppedRequestId,
+          });
           updateButtonState();
         } else {
           const modeText = doubleCreditMode
@@ -1846,6 +2022,10 @@ function parseQuestion() {
         .filter(Boolean)
     );
     options = { prompts, choices };
+  } else if (questionType === "ranking") {
+    options = getSortableChoiceItems(container)
+      .map((item) => getMatchingChoiceText(item))
+      .filter(Boolean);
   } else if (questionType === "select_text") {
     options = Array.from(
       container.querySelectorAll(".select-text-component .choice.-interactive")

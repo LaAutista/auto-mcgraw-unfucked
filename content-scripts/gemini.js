@@ -9,6 +9,15 @@ let observer = null;
 let pollIntervalId = null;
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "cancelRequest") {
+    if (message.requestId === activeRequestId) {
+      activeRequestId = null;
+      resetObservation();
+    }
+    sendResponse({ received: true });
+    return true;
+  }
+
   if (message.type === "receiveQuestion") {
     const requestId = message.requestId || JSON.stringify(message.question);
 
@@ -21,11 +30,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     activeRequestId = requestId;
     resetObservation();
 
-    messageCountAtQuestion = document.querySelectorAll("model-response").length;
     hasResponded = false;
 
-    insertQuestion(message.question)
-      .then(() => {
+    insertQuestion(message.question, requestId)
+      .then((inserted) => {
+        if (!inserted || requestId !== activeRequestId) {
+          sendResponse({ received: false, stale: true });
+          return;
+        }
         sendResponse({ received: true, status: "processing" });
       })
       .catch((error) => {
@@ -52,14 +64,17 @@ function resetObservation() {
   }
 }
 
-function waitForIdle(timeout = 120000) {
+function waitForIdle(requestId = activeRequestId, timeout = 120000) {
   return new Promise((resolve, reject) => {
     const startTime = Date.now();
     const interval = setInterval(() => {
       const sendButton = document.querySelector(".send-button");
-      if (!sendButton || !sendButton.classList.contains("stop")) {
+      if (requestId !== activeRequestId) {
         clearInterval(interval);
-        resolve();
+        resolve(false);
+      } else if (!sendButton || !sendButton.classList.contains("stop")) {
+        clearInterval(interval);
+        resolve(true);
       } else if (Date.now() - startTime > timeout) {
         clearInterval(interval);
         reject(new Error("Timed out waiting for Gemini to finish responding"));
@@ -68,7 +83,7 @@ function waitForIdle(timeout = 120000) {
   });
 }
 
-async function insertQuestion(questionData) {
+async function insertQuestion(questionData, requestId = activeRequestId) {
   const { type, question, options, previousCorrection } = questionData;
   let text = `Type: ${type}\nQuestion: ${question}`;
 
@@ -135,13 +150,17 @@ async function insertQuestion(questionData) {
     '\n\nIMPORTANT: Your answer should be in a JSON code block.' +
     '\n\nPlease provide your answer in JSON format with keys "answer" and "explanation". Explanations should be no more than one sentence. DO NOT acknowledge the correction in your response, only answer the new question.';
 
-  await waitForIdle();
+  if (!(await waitForIdle(requestId))) return false;
+  if (requestId !== activeRequestId) return false;
+  messageCountAtQuestion = document.querySelectorAll("model-response").length;
 
   const inputArea = document.querySelector(".ql-editor");
   if (!inputArea) throw new Error("Input area not found");
 
-  await submitToComposer(inputArea, text);
+  const submitted = await submitToComposer(inputArea, text, requestId);
+  if (!submitted || requestId !== activeRequestId) return false;
   startObserving();
+  return true;
 }
 
 function sleep(ms) {
@@ -196,11 +215,13 @@ function looksSent(inputArea) {
 // Type the question and reliably submit it, even when a long/heavy chat makes
 // the composer slow to become ready. Waits for the send button, verifies the
 // send, falls back to Enter, and retries before giving up.
-async function submitToComposer(inputArea, text) {
+async function submitToComposer(inputArea, text, requestId = activeRequestId) {
   for (let attempt = 1; attempt <= 3; attempt++) {
+    if (requestId !== activeRequestId) return false;
     setComposerText(inputArea, text);
 
     const sendButton = await waitForSelector(".send-button", 12000);
+    if (requestId !== activeRequestId) return false;
     if (sendButton) {
       sendButton.click();
     } else {
@@ -213,7 +234,8 @@ async function submitToComposer(inputArea, text) {
     }
 
     await sleep(600);
-    if (looksSent(inputArea)) return;
+    if (requestId !== activeRequestId) return false;
+    if (looksSent(inputArea)) return true;
 
     console.warn(
       "[Auto-McGraw][gemini] Submit attempt " +
@@ -276,16 +298,26 @@ function tryHandleResponse() {
   if (!responseText) return;
 
   hasResponded = true;
+  const requestId = activeRequestId;
   console.log("[Auto-McGraw][gemini] sending answer back:", responseText);
   promiseApi.runtime
     .sendMessage({
       type: "geminiResponse",
+      requestId,
       response: responseText,
     })
-    .then(() => {
-      resetObservation();
+    .then((delivery) => {
+      if (requestId !== activeRequestId) return;
+      if (delivery?.received || delivery?.stale) {
+        resetObservation();
+        return;
+      }
+      hasResponded = false;
+      console.warn("[Auto-McGraw][gemini] Answer delivery was not acknowledged; retrying.");
     })
     .catch((error) => {
+      if (requestId !== activeRequestId) return;
+      hasResponded = false;
       console.error("[Auto-McGraw][gemini] Error sending response:", error);
     });
 }

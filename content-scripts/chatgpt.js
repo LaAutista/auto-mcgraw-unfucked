@@ -9,6 +9,15 @@ let observer = null;
 let pollIntervalId = null;
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "cancelRequest") {
+    if (message.requestId === activeRequestId) {
+      activeRequestId = null;
+      resetObservation();
+    }
+    sendResponse({ received: true });
+    return true;
+  }
+
   if (message.type === "receiveQuestion") {
     const requestId = message.requestId || JSON.stringify(message.question);
 
@@ -21,13 +30,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     activeRequestId = requestId;
     resetObservation();
 
-    messageCountAtQuestion = document.querySelectorAll(
-      '[data-message-author-role="assistant"]'
-    ).length;
     hasResponded = false;
 
-    insertQuestion(message.question)
-      .then(() => {
+    insertQuestion(message.question, requestId)
+      .then((inserted) => {
+        if (!inserted || requestId !== activeRequestId) {
+          sendResponse({ received: false, stale: true });
+          return;
+        }
         sendResponse({ received: true, status: "processing" });
       })
       .catch((error) => {
@@ -54,7 +64,25 @@ function resetObservation() {
   }
 }
 
-async function insertQuestion(questionData) {
+function waitForIdle(requestId = activeRequestId, timeout = 120000) {
+  return new Promise((resolve, reject) => {
+    const startTime = Date.now();
+    const interval = setInterval(() => {
+      if (requestId !== activeRequestId) {
+        clearInterval(interval);
+        resolve(false);
+      } else if (!document.querySelector('[data-testid="stop-button"]')) {
+        clearInterval(interval);
+        resolve(true);
+      } else if (Date.now() - startTime > timeout) {
+        clearInterval(interval);
+        reject(new Error("Timed out waiting for ChatGPT to finish responding"));
+      }
+    }, 250);
+  });
+}
+
+async function insertQuestion(questionData, requestId = activeRequestId) {
   const { type, question, options, previousCorrection } = questionData;
   let text = `Type: ${type}\nQuestion: ${question}`;
 
@@ -121,11 +149,19 @@ async function insertQuestion(questionData) {
     '\n\nIMPORTANT: Your answer should be in a JSON code block.' +
     '\n\nPlease provide your answer in JSON format with keys "answer" and "explanation". Explanations should be no more than one sentence. DO NOT acknowledge the correction in your response, only answer the new question.';
 
+  if (!(await waitForIdle(requestId))) return false;
+  if (requestId !== activeRequestId) return false;
+  messageCountAtQuestion = document.querySelectorAll(
+    '[data-message-author-role="assistant"]'
+  ).length;
+
   const inputArea = document.getElementById("prompt-textarea");
   if (!inputArea) throw new Error("Input area not found");
 
-  await submitToComposer(inputArea, text);
+  const submitted = await submitToComposer(inputArea, text, requestId);
+  if (!submitted || requestId !== activeRequestId) return false;
   startObserving();
+  return true;
 }
 
 function sleep(ms) {
@@ -180,11 +216,13 @@ function looksSent(inputArea) {
 // Type the question and reliably submit it, even when a long/heavy chat makes
 // the composer slow to become ready. Waits for the send button, verifies the
 // send, falls back to Enter, and retries before giving up.
-async function submitToComposer(inputArea, text) {
+async function submitToComposer(inputArea, text, requestId = activeRequestId) {
   for (let attempt = 1; attempt <= 3; attempt++) {
+    if (requestId !== activeRequestId) return false;
     setComposerText(inputArea, text);
 
     const sendButton = await waitForSelector('[data-testid="send-button"]', 12000);
+    if (requestId !== activeRequestId) return false;
     if (sendButton) {
       sendButton.click();
     } else {
@@ -197,7 +235,8 @@ async function submitToComposer(inputArea, text) {
     }
 
     await sleep(600);
-    if (looksSent(inputArea)) return;
+    if (requestId !== activeRequestId) return false;
+    if (looksSent(inputArea)) return true;
 
     console.warn(
       "[Auto-McGraw][chatgpt] Submit attempt " +
@@ -262,16 +301,26 @@ function tryHandleResponse() {
   if (!responseText) return;
 
   hasResponded = true;
+  const requestId = activeRequestId;
   console.log("[Auto-McGraw][chatgpt] sending answer back:", responseText);
   promiseApi.runtime
     .sendMessage({
       type: "chatGPTResponse",
+      requestId,
       response: responseText,
     })
-    .then(() => {
-      resetObservation();
+    .then((delivery) => {
+      if (requestId !== activeRequestId) return;
+      if (delivery?.received || delivery?.stale) {
+        resetObservation();
+        return;
+      }
+      hasResponded = false;
+      console.warn("[Auto-McGraw][chatgpt] Answer delivery was not acknowledged; retrying.");
     })
     .catch((error) => {
+      if (requestId !== activeRequestId) return;
+      hasResponded = false;
       console.error("[Auto-McGraw][chatgpt] Error sending response:", error);
     });
 }

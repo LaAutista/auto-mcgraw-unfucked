@@ -132,6 +132,15 @@ function updateChatInputValue(chatInput, text) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "cancelRequest") {
+    if (message.requestId === activeRequestId) {
+      activeRequestId = null;
+      resetObservation();
+    }
+    sendResponse({ received: true });
+    return true;
+  }
+
   if (message.type === "receiveQuestion") {
     const requestId = message.requestId || JSON.stringify(message.question);
 
@@ -144,11 +153,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     activeRequestId = requestId;
     resetObservation();
 
-    messageCountAtQuestion = getMessageNodes().length;
     hasResponded = false;
 
-    insertQuestion(message.question)
-      .then(() => {
+    insertQuestion(message.question, requestId)
+      .then((inserted) => {
+        if (!inserted || requestId !== activeRequestId) {
+          sendResponse({ received: false, stale: true });
+          return;
+        }
         sendResponse({ received: true, status: "processing" });
       })
       .catch((error) => {
@@ -175,7 +187,28 @@ function resetObservation() {
   }
 }
 
-async function insertQuestion(questionData) {
+function waitForIdle(requestId = activeRequestId, timeout = 120000) {
+  return new Promise((resolve, reject) => {
+    const startTime = Date.now();
+    const interval = setInterval(() => {
+      const stopButton = document.querySelector(
+        '[data-testid="stop-button"], [aria-label*="Stop"], [title*="Stop"]'
+      );
+      if (requestId !== activeRequestId) {
+        clearInterval(interval);
+        resolve(false);
+      } else if (!stopButton) {
+        clearInterval(interval);
+        resolve(true);
+      } else if (Date.now() - startTime > timeout) {
+        clearInterval(interval);
+        reject(new Error("Timed out waiting for DeepSeek to finish responding"));
+      }
+    }, 250);
+  });
+}
+
+async function insertQuestion(questionData, requestId = activeRequestId) {
   const { type, question, options, previousCorrection } = questionData;
   let text = `Type: ${type}\nQuestion: ${question}`;
 
@@ -242,11 +275,17 @@ async function insertQuestion(questionData) {
     '\n\nIMPORTANT: Your answer should be in a JSON code block.' +
     '\n\nPlease provide your answer in JSON format with keys "answer" and "explanation". Explanations should be no more than one sentence. DO NOT acknowledge the correction in your response, only answer the new question.';
 
+  if (!(await waitForIdle(requestId))) return false;
+  if (requestId !== activeRequestId) return false;
+  messageCountAtQuestion = getMessageNodes().length;
+
   const chatInput = findChatInput();
   if (!chatInput) throw new Error("Input area not found");
 
-  await submitToComposer(chatInput, text);
+  const submitted = await submitToComposer(chatInput, text, requestId);
+  if (!submitted || requestId !== activeRequestId) return false;
   startObserving();
+  return true;
 }
 
 function sleep(ms) {
@@ -285,13 +324,15 @@ function looksSent(chatInput) {
 // Type the question and reliably submit it, even when a long/heavy chat makes
 // the composer slow to become ready. Waits for the send button, verifies the
 // send, falls back to Enter, and retries before giving up.
-async function submitToComposer(chatInput, text) {
+async function submitToComposer(chatInput, text, requestId = activeRequestId) {
   for (let attempt = 1; attempt <= 3; attempt++) {
+    if (requestId !== activeRequestId) return false;
     if (!updateChatInputValue(chatInput, text)) {
       throw new Error("Unable to fill input area");
     }
 
     const sendButton = await waitForSendButton(12000);
+    if (requestId !== activeRequestId) return false;
     if (sendButton) {
       sendButton.click();
     } else {
@@ -304,7 +345,8 @@ async function submitToComposer(chatInput, text) {
     }
 
     await sleep(600);
-    if (looksSent(chatInput)) return;
+    if (requestId !== activeRequestId) return false;
+    if (looksSent(chatInput)) return true;
 
     console.warn(
       "[Auto-McGraw][deepseek] Submit attempt " +
@@ -369,16 +411,26 @@ function tryHandleResponse() {
   if (!responseText) return;
 
   hasResponded = true;
+  const requestId = activeRequestId;
   console.log("[Auto-McGraw][deepseek] sending answer back:", responseText);
   promiseApi.runtime
     .sendMessage({
       type: "deepseekResponse",
+      requestId,
       response: responseText,
     })
-    .then(() => {
-      resetObservation();
+    .then((delivery) => {
+      if (requestId !== activeRequestId) return;
+      if (delivery?.received || delivery?.stale) {
+        resetObservation();
+        return;
+      }
+      hasResponded = false;
+      console.warn("[Auto-McGraw][deepseek] Answer delivery was not acknowledged; retrying.");
     })
     .catch((error) => {
+      if (requestId !== activeRequestId) return;
+      hasResponded = false;
       console.error("[Auto-McGraw][deepseek] Error sending response:", error);
     });
 }

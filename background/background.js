@@ -12,6 +12,7 @@ let storedResponse = null;
 let isProcessingDuplicate = false;
 let pendingResponse = null;
 const promiseApi = globalThis.browser ?? chrome;
+const REQUEST_KEY_PREFIX = "autoMcGrawRequest:";
 const DEEPSEEK_URL_PATTERNS = [
   "https://chat.deepseek.com/*",
 ];
@@ -48,6 +49,26 @@ function sendMessageWithRetry(tabId, message, maxAttempts = 3, delay = 1000) {
 
     attemptSend();
   });
+}
+
+function requestKey(requestId) {
+  return `${REQUEST_KEY_PREFIX}${requestId}`;
+}
+
+async function rememberRequest(requestId, tabId, windowId) {
+  await promiseApi.storage.session.set({
+    [requestKey(requestId)]: { tabId, windowId },
+  });
+}
+
+async function getRequest(requestId) {
+  if (!requestId) return null;
+  const key = requestKey(requestId);
+  return (await promiseApi.storage.session.get(key))[key] || null;
+}
+
+async function forgetRequest(requestId) {
+  if (requestId) await promiseApi.storage.session.remove(requestKey(requestId));
 }
 
 async function focusTab(tabId) {
@@ -117,6 +138,7 @@ async function processQuestion(message) {
   }
   processingQuestion = true;
   allowQueuedRestart = false;
+  const requestId = message.requestId || crypto.randomUUID();
 
   try {
     await findAndStoreTabs(message.sourceWindowId);
@@ -144,25 +166,23 @@ async function processQuestion(message) {
       await new Promise((resolve) => setTimeout(resolve, 300));
     }
 
+    await rememberRequest(requestId, mheTabId, mheWindowId);
+
     const aiResponse = await sendMessageWithRetry(aiTabId, {
       type: "receiveQuestion",
-      requestId: crypto.randomUUID(),
+      requestId,
       question: message.question,
     });
 
-    if (
-      aiResponse &&
-      aiResponse.received === false &&
-      !allowQueuedRestart &&
-      !queuedRestart
-    ) {
-      await sendMessageWithRetry(mheTabId, {
-        type: "alertMessage",
-        message: `Could not enter the question into ${aiType}: ${
-          aiResponse.error || "unknown error"
-        }. Check the ${aiType} tab.`,
-      });
-      if (!allowQueuedRestart && !queuedRestart) {
+    if (aiResponse && aiResponse.received === false) {
+      await forgetRequest(requestId);
+      if (!aiResponse.stale && !allowQueuedRestart && !queuedRestart) {
+        await sendMessageWithRetry(mheTabId, {
+          type: "alertMessage",
+          message: `Could not enter the question into ${aiType}: ${
+            aiResponse.error || "unknown error"
+          }. Check the ${aiType} tab.`,
+        });
         await sendMessageWithRetry(mheTabId, { type: "stopAutomation" });
       }
     }
@@ -175,6 +195,7 @@ async function processQuestion(message) {
       await focusTab(returnTabId);
     }
   } catch (error) {
+    await forgetRequest(requestId);
     if (mheTabId && !allowQueuedRestart && !queuedRestart) {
       await sendMessageWithRetry(mheTabId, {
         type: "alertMessage",
@@ -189,64 +210,58 @@ async function processQuestion(message) {
     if (queuedRestart) {
       const nextQuestion = queuedRestart;
       queuedRestart = null;
-      void processQuestion(nextQuestion);
+      await processQuestion(nextQuestion);
     }
   }
 }
 
 async function processResponse(message) {
+  const request = await getRequest(message.requestId);
+  if (!request) {
+    return { received: false, stale: true };
+  }
+
+  const targetTabId = request.tabId;
+  mheTabId = request.tabId;
+  mheWindowId = request.windowId;
+
   try {
     pendingResponse = message.response;
-
-    if (duplicateTabId && isProcessingDuplicate) {
-      await sendMessageWithRetry(duplicateTabId, {
-        type: "processChatGPTResponse",
-        response: message.response,
-        isDuplicateTab: true,
-      });
-      return;
-    }
-
-    if (originalTabId) {
-      storedResponse = message.response;
-      await sendMessageWithRetry(originalTabId, {
-        type: "processChatGPTResponse",
-        response: message.response,
-        isDuplicateTab: false,
-      });
-      return;
-    }
-
-    if (!mheTabId) {
-      const mheTabs = await promiseApi.tabs.query({
-        url: [
-          "https://learning.mheducation.com/*",
-          "https://ezto.mheducation.com/*",
-          "https://connect.mheducation.com/*",
-          "https://newconnect.mheducation.com/*",
-        ],
-      });
-      if (mheTabs.length > 0) {
-        mheTabId = mheTabs[0].id;
-        mheWindowId = mheTabs[0].windowId;
-      } else {
-        return;
-      }
-    }
 
     const switchTabs = await shouldFocusTabs();
 
     if (switchTabs) {
-      await focusTab(mheTabId);
+      await focusTab(targetTabId);
       await new Promise((resolve) => setTimeout(resolve, 300));
     }
 
-    await sendMessageWithRetry(mheTabId, {
+    const currentRequest = await getRequest(message.requestId);
+    if (
+      !currentRequest ||
+      currentRequest.tabId !== targetTabId ||
+      currentRequest.windowId !== request.windowId
+    ) {
+      return { received: false, stale: true };
+    }
+
+    const delivery = await sendMessageWithRetry(targetTabId, {
       type: "processChatGPTResponse",
+      requestId: message.requestId,
       response: message.response,
     });
+
+    if (!delivery?.received) {
+      if (delivery?.stale) {
+        await forgetRequest(message.requestId);
+      }
+      return delivery || { received: false };
+    }
+
+    await forgetRequest(message.requestId);
+    return { received: true };
   } catch (error) {
     console.error("Error processing AI response:", error);
+    return { received: false, error: error.message };
   }
 }
 
@@ -305,8 +320,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "sendQuestionToChatGPT") {
-    processQuestion(message);
-    sendResponse({ received: true });
+    processQuestion(message)
+      .then(() => sendResponse({ received: true }))
+      .catch((error) =>
+        sendResponse({ received: false, error: error.message })
+      );
     return true;
   }
 
@@ -315,8 +333,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     message.type === "geminiResponse" ||
     message.type === "deepseekResponse"
   ) {
-    processResponse(message);
-    sendResponse({ received: true });
+    processResponse(message)
+      .then(sendResponse)
+      .catch((error) =>
+        sendResponse({ received: false, error: error.message })
+      );
     return true;
   }
 
@@ -379,7 +400,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     storedResponse = null;
     isProcessingDuplicate = false;
     pendingResponse = null;
-    sendResponse({ received: true });
+    const cancelProvider =
+      message.requestId && aiTabId
+        ? sendMessageWithRetry(
+            aiTabId,
+            { type: "cancelRequest", requestId: message.requestId },
+            1
+          ).catch(() => null)
+        : Promise.resolve();
+    Promise.all([forgetRequest(message.requestId), cancelProvider])
+      .then(() => sendResponse({ received: true }))
+      .catch((error) =>
+        sendResponse({ received: false, error: error.message })
+      );
     return true;
   }
 
