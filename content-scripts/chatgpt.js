@@ -3,10 +3,23 @@ const promiseApi = globalThis.browser ?? chrome;
 let hasResponded = false;
 let activeRequestId = null;
 let messageCountAtQuestion = 0;
+let assistantMessagesAtQuestion = new Set();
+let candidateAnswer = null;
+let candidateSince = 0;
 let observationStartTime = 0;
 let observationTimeout = null;
 let observer = null;
 let pollIntervalId = null;
+
+function recordDiagnostic(stage, details = {}, requestId = activeRequestId) {
+  try {
+    chrome.runtime.sendMessage({ type: "diagnosticEvent", stage: `chatgpt.${stage}`, requestId, details }, () => {
+      void chrome.runtime.lastError;
+    });
+  } catch {
+    // Diagnostics cannot interrupt a request during an extension reload.
+  }
+}
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "cancelRequest") {
@@ -29,6 +42,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     activeRequestId = requestId;
     resetObservation();
+    recordDiagnostic("question.received", { questionType: message.question?.type });
 
     hasResponded = false;
 
@@ -41,6 +55,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ received: true, status: "processing" });
       })
       .catch((error) => {
+        recordDiagnostic("submit.error", { errorName: error.name });
         sendResponse({ received: false, error: error.message });
       });
 
@@ -50,6 +65,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 function resetObservation() {
   hasResponded = false;
+  candidateAnswer = null;
+  candidateSince = 0;
   if (observationTimeout) {
     clearTimeout(observationTimeout);
     observationTimeout = null;
@@ -151,21 +168,61 @@ async function insertQuestion(questionData, requestId = activeRequestId) {
 
   if (!(await waitForIdle(requestId))) return false;
   if (requestId !== activeRequestId) return false;
-  messageCountAtQuestion = document.querySelectorAll(
+  const existingAssistantMessages = Array.from(document.querySelectorAll(
     '[data-message-author-role="assistant"]'
-  ).length;
+  ));
+  messageCountAtQuestion = existingAssistantMessages.length;
+  assistantMessagesAtQuestion = new Set(
+    existingAssistantMessages.map(getAssistantMessageKey)
+  );
 
   const inputArea = document.getElementById("prompt-textarea");
   if (!inputArea) throw new Error("Input area not found");
 
+  if (questionData.images?.length) {
+    if (!(await attachQuestionImages(inputArea, questionData.images, requestId))) return false;
+    text += "\n\nThe attached images belong to this question. Inspect them before answering.";
+  }
   const submitted = await submitToComposer(inputArea, text, requestId);
   if (!submitted || requestId !== activeRequestId) return false;
+  recordDiagnostic("question.submitted", { status: "submitted", messageCount: messageCountAtQuestion });
   startObserving();
   return true;
 }
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function attachQuestionImages(inputArea, images, requestId) {
+  const form = inputArea.closest("form");
+  const upload = form?.querySelector('input[type="file"]');
+  if (!upload || images.length > 4) throw new Error("ChatGPT image upload is unavailable");
+  const previews = () => form.querySelectorAll('button[aria-label^="Remove"]');
+  if (previews().length) throw new Error("Clear existing ChatGPT attachments before starting");
+  const files = new DataTransfer();
+  images.forEach(({ dataUrl }, index) => {
+    const match = typeof dataUrl === "string" && dataUrl.match(/^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=]+)$/);
+    if (!match || dataUrl.length > 3 * 1024 * 1024) throw new Error("Question image was not loaded safely");
+    const bytes = Uint8Array.from(atob(match[2]), (char) => char.charCodeAt(0));
+    files.items.add(new File([bytes], `mcgraw-question-${index + 1}.${match[1].split("/")[1]}`, { type: match[1] }));
+  });
+  if (requestId !== activeRequestId) return false;
+  upload.files = files.files;
+  upload.dispatchEvent(new Event("change", { bubbles: true }));
+  const deadline = Date.now() + 60000;
+  while (Date.now() < deadline) {
+    if (requestId !== activeRequestId) return false;
+    // The file input accepting a FileList is not proof the app uploaded it.
+    const send = form.querySelector('[data-testid="send-button"]');
+    if (previews().length === images.length && send && !send.disabled &&
+        !form.querySelector('[role="progressbar"], [aria-busy="true"]')) {
+      recordDiagnostic("images.attached", { optionCount: images.length });
+      return true;
+    }
+    await sleep(250);
+  }
+  throw new Error("ChatGPT did not finish uploading the question image");
 }
 
 // Poll for a selector instead of guessing a fixed delay. Resolves with the
@@ -207,21 +264,28 @@ function pressEnter(inputArea) {
 
 // Did the message actually go out? The composer clears on send, and ChatGPT
 // shows a stop button while generating — either one confirms success.
-function looksSent(inputArea) {
-  const stillHasText = (inputArea.innerText || "").trim().length > 0;
+function looksSent(inputArea, previousUserMessages = new Set()) {
+  const liveInput = document.getElementById("prompt-textarea") || inputArea;
+  const stillHasText = (liveInput.innerText || "").trim().length > 0;
   const generating = !!document.querySelector('[data-testid="stop-button"]');
-  return generating || !stillHasText;
+  const newUserMessage = Array.from(document.querySelectorAll('[data-message-author-role="user"]'))
+    .some((message) => !previousUserMessages.has(getAssistantMessageKey(message)));
+  return generating || !stillHasText || newUserMessage;
 }
 
 // Type the question and reliably submit it, even when a long/heavy chat makes
 // the composer slow to become ready. Waits for the send button, verifies the
 // send, falls back to Enter, and retries before giving up.
 async function submitToComposer(inputArea, text, requestId = activeRequestId) {
+  const previousUserMessages = new Set(Array.from(
+    document.querySelectorAll('[data-message-author-role="user"]'), getAssistantMessageKey
+  ));
   for (let attempt = 1; attempt <= 3; attempt++) {
     if (requestId !== activeRequestId) return false;
+    inputArea = document.getElementById("prompt-textarea") || inputArea;
     setComposerText(inputArea, text);
 
-    const sendButton = await waitForSelector('[data-testid="send-button"]', 12000);
+    const sendButton = await waitForSelector('[data-testid="send-button"]:not(:disabled)', 12000);
     if (requestId !== activeRequestId) return false;
     if (sendButton) {
       sendButton.click();
@@ -236,7 +300,7 @@ async function submitToComposer(inputArea, text, requestId = activeRequestId) {
 
     await sleep(600);
     if (requestId !== activeRequestId) return false;
-    if (looksSent(inputArea)) return true;
+    if (looksSent(inputArea, previousUserMessages)) return true;
 
     console.warn(
       "[Auto-McGraw][chatgpt] Submit attempt " +
@@ -252,13 +316,24 @@ async function submitToComposer(inputArea, text, requestId = activeRequestId) {
 // Pull a parseable JSON answer out of the latest assistant message.
 // Returns the JSON string if found, or null while the model is still
 // thinking / streaming (e.g. the message just says "Thinking").
+function getAssistantMessageKey(message) {
+  return message.getAttribute("data-message-id") || message;
+}
+
 function getLatestAnswerJson() {
+  if (document.querySelector('[data-testid="stop-button"]')) return null;
   const messages = document.querySelectorAll(
     '[data-message-author-role="assistant"]'
   );
-  if (messages.length <= messageCountAtQuestion) return null;
-
-  const latestMessage = messages[messages.length - 1];
+  // Image replies can leave an empty assistant placeholder after the finished
+  // message. Ignore only empty shells, never a newer nonempty thinking reply.
+  const latestMessage = Array.from(messages).reverse().find(
+    (message) => (message.textContent || "").trim()
+  );
+  if (
+    !latestMessage ||
+    assistantMessagesAtQuestion.has(getAssistantMessageKey(latestMessage))
+  ) return null;
 
   const candidates = [];
 
@@ -283,7 +358,9 @@ function getLatestAnswerJson() {
 
     try {
       const parsed = JSON.parse(candidate);
-      if (parsed && parsed.answer !== undefined) {
+      // ChatGPT's code animation can pause on valid JSON containing this
+      // placeholder, especially in a hidden tab. It is not an answer yet.
+      if (parsed && parsed.answer !== undefined && !JSON.stringify(parsed.answer).includes("]()")) {
         return candidate;
       }
     } catch (e) {
@@ -295,14 +372,26 @@ function getLatestAnswerJson() {
 }
 
 function tryHandleResponse() {
-  if (hasResponded) return;
+  if (hasResponded || !activeRequestId) return;
 
   const responseText = getLatestAnswerJson();
-  if (!responseText) return;
+  if (!responseText) {
+    candidateAnswer = null;
+    candidateSince = 0;
+    return;
+  }
+  // Code-block animations can briefly form valid but incorrect JSON even after
+  // the stop button disappears. Require a quiet second before applying it.
+  if (responseText !== candidateAnswer) {
+    candidateAnswer = responseText;
+    candidateSince = Date.now();
+    return;
+  }
+  if (Date.now() - candidateSince < 1000) return;
 
   hasResponded = true;
   const requestId = activeRequestId;
-  console.log("[Auto-McGraw][chatgpt] sending answer back:", responseText);
+  recordDiagnostic("answer.ready", { stable: true, elapsedMs: Date.now() - observationStartTime });
   promiseApi.runtime
     .sendMessage({
       type: "chatGPTResponse",
@@ -311,6 +400,7 @@ function tryHandleResponse() {
     })
     .then((delivery) => {
       if (requestId !== activeRequestId) return;
+      recordDiagnostic("answer.delivery", { received: !!delivery?.received, stale: !!delivery?.stale });
       if (delivery?.received || delivery?.stale) {
         resetObservation();
         return;
@@ -321,6 +411,7 @@ function tryHandleResponse() {
     .catch((error) => {
       if (requestId !== activeRequestId) return;
       hasResponded = false;
+      recordDiagnostic("answer.error", { errorName: error.name });
       console.error("[Auto-McGraw][chatgpt] Error sending response:", error);
     });
 }
@@ -329,8 +420,8 @@ function startObserving() {
   observationStartTime = Date.now();
   observationTimeout = setTimeout(() => {
     if (!hasResponded) {
-      console.warn("[Auto-McGraw][chatgpt] Gave up waiting for a JSON answer.");
-      resetObservation();
+      recordDiagnostic("answer.slow", { status: "waiting", elapsedMs: Date.now() - observationStartTime });
+      console.warn("[Auto-McGraw][chatgpt] Still waiting for a JSON answer.");
     }
   }, 180000);
 

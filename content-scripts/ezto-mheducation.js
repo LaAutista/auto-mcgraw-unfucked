@@ -648,14 +648,9 @@ function addAssistantButton() {
       if (isAutomating) {
         stopAutomation("Manual stop");
       } else {
-        const proceed = confirm(
-          "Start quiz automation? The automation will stop automatically when the quiz ends.\n\nClick OK to begin, or Cancel to stop."
-        );
-        if (proceed) {
-          isAutomating = true;
-          btn.textContent = "Stop Automation";
-          checkForNextStep();
-        }
+        isAutomating = true;
+        btn.textContent = "Stop Automation";
+        checkForNextStep();
       }
     });
 

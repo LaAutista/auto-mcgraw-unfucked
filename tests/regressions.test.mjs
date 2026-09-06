@@ -12,8 +12,11 @@ const providers = [
   ["deepseek.js", "[data-testid='chat-message-assistant']"],
 ];
 
+let nextMessageId = 0;
 function makeMessage() {
+  const messageId = `message-${++nextMessageId}`;
   return {
+    getAttribute: (name) => name === "data-message-id" ? messageId : null,
     textContent: response,
     querySelectorAll: () => [{ textContent: response }],
   };
@@ -21,21 +24,28 @@ function makeMessage() {
 
 for (const [file, messageSelector] of providers) {
   let listener;
+  let now = 1000;
   const sent = [];
   const deliveryResolvers = [];
   const messages = [makeMessage()];
   const context = vm.createContext({
     console: { log() {}, warn() {}, error() {} },
+    Date: { now: () => now },
+    assistantMessages: messages,
     document: {
       getElementById: () => ({}),
-      querySelector: () => ({}),
+      querySelector: (selector) => selector === '[data-testid="stop-button"]' ? null : ({}),
       querySelectorAll: (selector) =>
         selector === messageSelector ? messages : [],
     },
     chrome: {
       runtime: {
         onMessage: { addListener: (fn) => (listener = fn) },
-        sendMessage(message) {
+        sendMessage(message, callback) {
+          if (message.type === "diagnosticEvent") {
+            callback?.({ received: true });
+            return Promise.resolve({ received: true });
+          }
           sent.push(message);
           return new Promise((resolve) => deliveryResolvers.push(resolve));
         },
@@ -185,6 +195,10 @@ for (const [file, messageSelector] of providers) {
 
   messages.push(makeMessage());
   vm.runInContext("tryHandleResponse()", context);
+  if (file === "chatgpt.js") {
+    now += 1000;
+    vm.runInContext("tryHandleResponse()", context);
+  }
   assert.equal(sent.length, 1, `${file}: ignored a new identical response`);
   assert.equal(sent[0].response, response);
   assert.equal(sent[0].requestId, "request-2");
@@ -211,6 +225,26 @@ for (const [file, messageSelector] of providers) {
     "request-3",
     `${file}: late ACK replaced a newer request`
   );
+
+  if (file === "chatgpt.js") {
+    vm.runInContext(
+      `activeRequestId = "virtualized-request";
+       resetObservation();
+       assistantMessagesAtQuestion = new Set(assistantMessages.map(getAssistantMessageKey));
+       messageCountAtQuestion = assistantMessages.length;`,
+      context
+    );
+    messages.shift();
+    messages.push(makeMessage());
+    vm.runInContext("tryHandleResponse()", context);
+    now += 1000;
+    vm.runInContext("tryHandleResponse()", context);
+    assert.equal(
+      sent.at(-1).requestId,
+      "virtualized-request",
+      "chatgpt.js: ignored a new answer when an old DOM message was virtualized"
+    );
+  }
 }
 
 const background = read("background/background.js");
@@ -310,17 +344,17 @@ async function testTabSwitching() {
     return [...updatedTabs];
   }
 
-  assert.deepEqual(await runQuestion(), [22, 11], "tab switching default");
+  assert.deepEqual(await runQuestion(), [22], "tab switching default keeps AI visible");
   tabSwitchingEnabled = false;
   assert.deepEqual(await runQuestion(), [], "tab switching disabled");
   tabSwitchingEnabled = true;
-  assert.deepEqual(await runQuestion(), [22, 11], "tab switching re-enabled");
+  assert.deepEqual(await runQuestion(), [22], "tab switching re-enabled keeps AI visible");
 
   aiTabs = [
     { id: 33, windowId: 8 },
     { id: 22, windowId: 7 },
   ];
-  assert.deepEqual(await runQuestion(), [22, 11], "same-window AI tab");
+  assert.deepEqual(await runQuestion(), [22], "same-window AI tab stays visible");
 
   tabSwitchingEnabled = false;
   await runQuestion();
@@ -509,14 +543,25 @@ async function testMathTextRoundTrip() {
     elementNode("span", mathPreview, mathJax, mathSource),
   ];
   let ignoreClicks = false;
-  const inputs = options.map((option) => ({
-    type: "checkbox",
-    checked: false,
-    click() {
-      if (!ignoreClicks) this.checked = !this.checked;
-    },
-    closest: () => ({ querySelector: () => option }),
-  }));
+  const labelledOptions = new Map();
+  const inputs = options.map((option, index) => {
+    const labelId = `choice-${index}`;
+    labelledOptions.set(labelId, option);
+    return {
+      type: "checkbox",
+      checked: false,
+      getAttribute: (name) =>
+        index < 2 && name === "aria-labelledby" ? labelId : null,
+      labels:
+        index < 2
+          ? []
+          : [{ querySelector: (selector) => (selector === ".choiceText" ? option : null) }],
+      click() {
+        if (!ignoreClicks) this.checked = !this.checked;
+      },
+      closest: () => null,
+    };
+  });
   const container = {
     querySelector(selector) {
       if (selector === ".awd-probe-type-multiple_select") return {};
@@ -524,26 +569,71 @@ async function testMathTextRoundTrip() {
       return null;
     },
     querySelectorAll(selector) {
-      if (selector === ".choiceText") return options;
+      if (selector === ".choiceText") return [];
       if (selector.includes('input[type="radio"]')) return inputs;
       return [];
     },
   };
+  class FakeEvent {
+    constructor(type) {
+      this.type = type;
+    }
+  }
+  const fillEventSnapshots = [];
+  class FakeInput {
+    constructor() {
+      this._value = "";
+      this.events = [];
+    }
+    get value() {
+      return this._value;
+    }
+    set value(value) {
+      this._value = value;
+    }
+    focus() {}
+    blur() {}
+    dispatchEvent(event) {
+      this.events.push(event.type);
+      fillEventSnapshots.push(fillInputs.map((input) => input.value));
+    }
+  }
+  const fillInputs = [new FakeInput(), new FakeInput()];
+  const fillContainer = {
+    querySelector: (selector) =>
+      selector === ".awd-probe-type-fill_in_the_blank" ? {} : null,
+    querySelectorAll: (selector) =>
+      selector === "input.fitb-input" ? fillInputs : [],
+  };
   let mheListener;
   let currentContainer = container;
+  let pageText = "";
+  let statusElement = null;
   const outboundMessages = [];
   const context = vm.createContext({
     console: { log() {}, warn() {}, error() {} },
     alert() {},
     confirm: () => false,
+    Event: FakeEvent,
+    HTMLInputElement: FakeInput,
+    fillContainer,
     crypto: { randomUUID: () => "request-current" },
     setInterval: () => 1,
     clearInterval() {},
     setTimeout: () => 1,
     clearTimeout() {},
     document: {
+      body: {
+        appendChild(element) { statusElement = element; },
+        get innerText() {
+          return pageText;
+        },
+      },
+      createElement: () => ({ style: {}, setAttribute() {} }),
+      getElementById: (id) => id === "automcgraw-status" ? statusElement : labelledOptions.get(id) || null,
       querySelector: (selector) =>
         selector === ".probe-container" ? currentContainer : null,
+      querySelectorAll: () => [],
     },
     chrome: {
       storage: {
@@ -565,6 +655,52 @@ async function testMathTextRoundTrip() {
   });
 
   vm.runInContext(mhe, context, { filename: "mheducation.js" });
+  const originalParseQuestion = context.parseQuestion;
+  const signatureFor = (question) => {
+    context.parseQuestion = () => question;
+    const before = JSON.stringify(question);
+    const signature = vm.runInContext("getQuestionSignature({})", context);
+    assert.equal(JSON.stringify(question), before, "signature mutated parsed option order");
+    return signature;
+  };
+  for (const type of ["ranking", "matching"]) {
+    const optionsFor = (choices) => type === "matching"
+      ? { prompts: ["Second prompt", "First prompt"], choices }
+      : choices;
+    const question = { type, question: "Arrange the colors", options: optionsFor(["red", "blue", "green"]) };
+    const signature = signatureFor(question);
+    assert.equal(
+      signatureFor({ ...question, options: optionsFor(["green", "red", "blue"]) }),
+      signature,
+      `${type}: filling reordered choices and changed question identity`
+    );
+    assert.notEqual(
+      signatureFor({ ...question, question: "Arrange different colors" }),
+      signature,
+      `${type}: ignored changed question text`
+    );
+    assert.notEqual(
+      signatureFor({ ...question, options: optionsFor(["red", "orange", "green"]) }),
+      signature,
+      `${type}: ignored an actual changed choice`
+    );
+    if (type === "matching") {
+      assert.notEqual(
+        signatureFor({ ...question, options: { ...question.options, prompts: [...question.options.prompts].reverse() } }),
+        signature,
+        "matching: ignored changed prompt order"
+      );
+    }
+  }
+  context.parseQuestion = originalParseQuestion;
+  assert.equal(
+    vm.runInContext(
+      'isAnswerMatch("Quebec, Canada (53° north)", "Quebec, Canada (53^o north)")',
+      context
+    ),
+    true,
+    "rejected ChatGPT's plain-text degree notation"
+  );
   const parsed = JSON.parse(
     vm.runInContext("JSON.stringify(parseQuestion())", context)
   );
@@ -580,6 +716,26 @@ async function testMathTextRoundTrip() {
     ],
     previousCorrection: null,
   });
+
+  assert.equal(
+    vm.runInContext(
+      'fillInAnswers(["revolution", "rotation"], fillContainer)',
+      context
+    ),
+    2
+  );
+  assert.deepEqual(
+    fillInputs.map(({ value, events }) => ({ value, events })),
+    [
+      { value: "revolution", events: ["input", "change"] },
+      { value: "rotation", events: ["input", "change"] },
+    ]
+  );
+  assert.deepEqual(
+    fillEventSnapshots[0],
+    ["revolution", "rotation"],
+    "dispatched a fill-in event before every blank had a value"
+  );
 
   inputs[2].checked = true;
   assert.equal(
@@ -680,6 +836,62 @@ async function testMathTextRoundTrip() {
     [true, true, false, false, true]
   );
   assert.equal(vm.runInContext("activeQuestionRequestId", context), null);
+
+  vm.runInContext(
+    `pauseBeforeSubmit = false;
+     lastQueuedQuestionSignature = "";
+     globalThis.advanceStarted = false;
+     submitAndAdvance = () => {
+       advanceStarted = true;
+       return new Promise((resolve) => { globalThis.releaseAdvance = resolve; });
+     };
+     checkForNextStep();`,
+    context
+  );
+  let advanceReply;
+  mheListener(
+    {
+      type: "processChatGPTResponse",
+      requestId: "request-current",
+      response: JSON.stringify({
+        answer: ["(10^-2)^2", "0.0001", "10^2/10^6"],
+      }),
+    },
+    {},
+    (reply) => (advanceReply = reply)
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(context.advanceStarted, true);
+  assert.equal(advanceReply, undefined, "ACKed before submit/advance completed");
+  vm.runInContext("releaseAdvance()", context);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(advanceReply.received, true);
+
+  const questionMessages = () =>
+    outboundMessages.filter(({ type }) => type === "sendQuestionToChatGPT");
+  const messagesBeforeSameQuestion = questionMessages().length;
+  vm.runInContext("checkForNextStep()", context);
+  assert.equal(
+    questionMessages().length,
+    messagesBeforeSameQuestion,
+    "requeued the same visible question"
+  );
+  prompt.childNodes[0].textContent = "A newly rendered question: ";
+  vm.runInContext("checkForNextStep()", context);
+  assert.equal(
+    questionMessages().length,
+    messagesBeforeSameQuestion + 1,
+    "missed a newly rendered question"
+  );
+
+  currentContainer = null;
+  pageText = "Accuracy Confidence Challenging Concepts";
+  vm.runInContext("activeQuestionRequestId = null; checkForNextStep()", context);
+  assert.equal(
+    vm.runInContext("isAutomating", context),
+    false,
+    "did not stop on the assignment completion screen"
+  );
 }
 
 await testMathTextRoundTrip();
@@ -694,32 +906,55 @@ async function testSortableRankingRoundTrip() {
     textContent: text,
   });
   const items = [];
-  let liftedItem = null;
+  let draggingItem = null;
+  let dragTargetY = null;
+  const dragWindow = {
+    dispatchEvent(event) {
+      if (event.type === "mousemove") dragTargetY = event.clientY;
+      if (event.type === "mouseup" && draggingItem) {
+        const sourceIndex = items.indexOf(draggingItem);
+        const targetIndex = items.findIndex((item) => {
+          const rect = item.getBoundingClientRect();
+          return dragTargetY === rect.top + rect.height / 2;
+        });
+        if (sourceIndex >= 0 && targetIndex >= 0 && sourceIndex !== targetIndex) {
+          items.splice(targetIndex, 0, items.splice(sourceIndex, 1)[0]);
+        }
+        draggingItem = null;
+      }
+      return true;
+    },
+  };
   const makeItem = (text) => {
     const content = elementNode(text);
-    return {
+    const item = {
+      id: `sortable-${items.length}-${text}`,
       text,
+      ownerDocument: { defaultView: dragWindow },
+      classList: {
+        contains: (name) => name === "-dragging" && draggingItem === item,
+      },
+      getAttribute: (name) =>
+        name === "aria-pressed" && draggingItem === item ? "true" : "false",
+      getBoundingClientRect() {
+        return {
+          left: 100,
+          top: items.indexOf(this) * 50,
+          width: 200,
+          height: 40,
+        };
+      },
       focus() {},
       matches: (selector) =>
         selector === "[data-react-beautiful-dnd-drag-handle]",
       querySelector: (selector) =>
         selector === ".content" || selector === "p" ? content : null,
       dispatchEvent(event) {
-        if (event.type !== "keydown") return true;
-        if (event.key === " ") {
-          liftedItem = liftedItem === this ? null : this;
-          return true;
-        }
-        if (liftedItem !== this) return true;
-
-        const index = items.indexOf(this);
-        const target = index + (event.key === "ArrowUp" ? -1 : 1);
-        if (target >= 0 && target < items.length) {
-          items.splice(target, 0, items.splice(index, 1)[0]);
-        }
+        if (event.type === "mousedown") draggingItem = this;
         return true;
       },
     };
+    return item;
   };
   items.push(
     ...[
@@ -756,11 +991,14 @@ async function testSortableRankingRoundTrip() {
       Object.assign(this, init);
     }
   }
+  class FakeMouseEvent extends FakeKeyboardEvent {}
   const context = vm.createContext({
     console: { log() {}, warn() {}, error() {}, info() {} },
     alert() {},
     confirm: () => false,
     KeyboardEvent: FakeKeyboardEvent,
+    MouseEvent: FakeMouseEvent,
+    innerWidth: 1000,
     setInterval: () => 1,
     clearInterval() {},
     setTimeout(callback) {
@@ -769,6 +1007,9 @@ async function testSortableRankingRoundTrip() {
     },
     clearTimeout() {},
     document: {
+      body: { appendChild() {} },
+      createElement: () => ({ style: {}, setAttribute() {} }),
+      getElementById: (id) => items.find((item) => item.id === id) || null,
       querySelector: (selector) =>
         selector === ".probe-container" ? container : null,
     },
@@ -805,6 +1046,110 @@ async function testSortableRankingRoundTrip() {
     context
   );
   assert.deepEqual(items.map(({ text }) => text), targetOrder);
+
+  const multiSlotTargets = JSON.parse(
+    vm.runInContext(
+      `getMatchingResponseSlots = () => [
+         { rowIndex: 0, slotIndex: 0, promptText: "Equinox" },
+         { rowIndex: 0, slotIndex: 1, promptText: "Equinox" },
+         { rowIndex: 1, slotIndex: 0, promptText: "Solstice" },
+         { rowIndex: 1, slotIndex: 1, promptText: "Solstice" },
+       ];
+       globalThis.multiSlotChoices = ["Equal day and night", "March and September", "June and December", "Longest or shortest nights"].map((text) => ({ text }));
+       getMatchingChoiceItems = () => multiSlotChoices;
+       getMatchingChoiceText = (item) => item?.text || "";
+       JSON.stringify(normalizeMatchingTargets({}, ${JSON.stringify([
+         "Equinox -> Equal day and night",
+         "Equinox -> March and September",
+         "Solstice -> June and December",
+         "Solstice -> Longest or shortest nights",
+       ])}))`,
+      context
+    )
+  );
+  assert.deepEqual(
+    multiSlotTargets.map(({ targetIndex, rowIndex, slotIndex, promptText, choiceText }) => ({
+      targetIndex,
+      rowIndex,
+      slotIndex,
+      promptText,
+      choiceText,
+    })),
+    [
+      { targetIndex: 0, rowIndex: 0, slotIndex: 0, promptText: "Equinox", choiceText: "Equal day and night" },
+      { targetIndex: 1, rowIndex: 0, slotIndex: 1, promptText: "Equinox", choiceText: "March and September" },
+      { targetIndex: 2, rowIndex: 1, slotIndex: 0, promptText: "Solstice", choiceText: "June and December" },
+      { targetIndex: 3, rowIndex: 1, slotIndex: 1, promptText: "Solstice", choiceText: "Longest or shortest nights" },
+    ],
+    "collapsed multiple response slots into one target per prompt"
+  );
+
+  vm.runInContext(
+    `globalThis.matchingDropped = false;
+     globalThis.matchingLocationChecks = 0;
+     globalThis.matchingDragging = false;
+     globalThis.matchingMouseEvents = [];
+     globalThis.MouseEvent = class {
+       constructor(type, init) { this.type = type; Object.assign(this, init); }
+     };
+     globalThis.innerWidth = 1000;
+     globalThis.matchingDragWindow = {
+       dispatchEvent(event) {
+         matchingMouseEvents.push(event.type);
+         if (event.type === "mousemove" && !matchingDragging) matchingDragging = true;
+         else if (event.type === "mouseup") matchingDropped = true;
+         return true;
+       },
+     };
+     globalThis.matchingSource = {
+       id: "matching-source",
+       ownerDocument: { defaultView: matchingDragWindow },
+       classList: { contains: (name) => name === "-dragging" && matchingDragging },
+       getAttribute: (name) => name === "aria-pressed" && matchingDragging ? "true" : "false",
+       getBoundingClientRect: () => ({ left: 100, top: 100, width: 100, height: 40 }),
+       dispatchEvent(event) { matchingMouseEvents.push(event.type); return true; },
+     };
+     globalThis.matchingTargetBox = {
+       getBoundingClientRect: () => ({ left: 300, top: 50, width: 100, height: 40 }),
+     };
+     globalThis.matchingTargetHolder = {
+       querySelector(selector) {
+         if (selector === ".choice-item-wrapper") return matchingTargetBox;
+         return null;
+       },
+     };
+     document.getElementById = (id) => id === "matching-source" ? matchingSource : null;
+     getMatchingResponseSlots = () => [
+       { holder: matchingTargetHolder }, {}, {}, {},
+     ];
+     getMatchingChoiceLocation = () => {
+       matchingLocationChecks++;
+       if (matchingDropped) {
+         return { area: "response", targetIndex: 0, poolIndex: -1, item: {} };
+       }
+       return {
+         area: "pool",
+         targetIndex: -1,
+         poolIndex: 0,
+         item: matchingSource,
+       };
+     };
+     getMatchingDragHandle = (item) => item;
+     delay = () => Promise.resolve();`,
+    context
+  );
+  assert.equal(
+    await vm.runInContext('moveMatchingChoiceToTarget({}, "delayed", 0)', context),
+    true,
+    "gave up before McGraw exposed the completed matching drop"
+  );
+  assert.deepEqual([...context.matchingMouseEvents], [
+    "mousedown",
+    "mousemove",
+    "mousemove",
+    "mouseup",
+  ]);
+  assert.ok(vm.runInContext("matchingLocationChecks", context) >= 2);
 }
 
 await testSortableRankingRoundTrip();

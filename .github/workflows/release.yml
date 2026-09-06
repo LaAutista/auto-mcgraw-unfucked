@@ -1,104 +1,45 @@
-name: Create Release
+name: Build Release Candidates
 
+# Publishing is deliberate: a rebuilt candidate must not replace a tested XPI.
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - 'manifest.json'
+
+permissions:
+  contents: read
 
 jobs:
-  check-version:
+  package:
     runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.get-version.outputs.version }}
-      has_changed: ${{ steps.version-check.outputs.has_changed }}
-      last_tag: ${{ steps.get-latest-tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
         with:
-          fetch-depth: 0
-      
-      - name: Get version from manifest
-        id: get-version
-        run: |
-          VERSION=$(jq -r .version manifest.json)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Get latest tag
-        id: get-latest-tag
-        run: |
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "none")
-          echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
-
-      - name: Check if version changed
-        id: version-check
-        run: |
-          MANIFEST_VERSION=$(jq -r .version manifest.json)
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "none")
-          if [ "$LATEST_TAG" = "none" ] || [ "v$MANIFEST_VERSION" != "$LATEST_TAG" ]; then
-            echo "has_changed=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_changed=false" >> $GITHUB_OUTPUT
-          fi
-
-  create-release:
-    needs: check-version
-    if: needs.check-version.outputs.has_changed == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Generate changelog
-        id: changelog
-        run: |
-          LATEST_TAG="${{ needs.check-version.outputs.last_tag }}"
-          if [ "$LATEST_TAG" = "none" ]; then
-            CHANGELOG=$(git log --pretty=format:"* %s (%h)" --no-merges)
-          else
-            CHANGELOG=$(git log --pretty=format:"* %s (%h)" --no-merges $LATEST_TAG..HEAD)
-          fi
-          echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
-          echo "$CHANGELOG" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          node-version: '22'
 
       - name: Test
-        run: node tests/regressions.test.mjs
+        run: node --test tests/*.test.mjs
 
-      - name: Create browser packages
+      - name: Package Firefox and experimental Chromium
         run: |
-          zip -r auto-mcgraw-brave-chrome.zip \
-            manifest.json \
-            LICENSE \
-            assets/icon.png \
-            assets/settings-icon.svg \
-            background \
-            content-scripts \
-            popup
-          cp auto-mcgraw-brave-chrome.zip auto-mcgraw-firefox-unsigned.xpi
+          VERSION=$(jq -er .version manifest.json)
+          FIREFOX="auto-mcgraw-firefox-$VERSION-unsigned.xpi"
+          CHROMIUM="auto-mcgraw-chrome-brave-$VERSION-experimental.zip"
+          zip -r "$FIREFOX" manifest.json LICENSE assets/icon.png assets/settings-icon.svg background content-scripts popup
+          mkdir chromium
+          unzip -q "$FIREFOX" -d chromium
+          jq 'del(.background.scripts, .browser_specific_settings) | .minimum_chrome_version = "121"' manifest.json > chromium/manifest.json
+          jq -e '.manifest_version == 3 and .background.service_worker == "background/background.js" and (.background | has("scripts") | not) and (has("browser_specific_settings") | not)' chromium/manifest.json
+          (cd chromium && zip -r "../$CHROMIUM" manifest.json LICENSE assets/icon.png assets/settings-icon.svg background content-scripts popup)
+          unzip -t "$FIREFOX"
+          unzip -t "$CHROMIUM"
+          sha256sum "$FIREFOX" "$CHROMIUM" > SHA256SUMS.txt
 
-      - name: Create Release
-        id: create_release
-        uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@v4
         with:
-          tag_name: v${{ needs.check-version.outputs.version }}
-          name: Release v${{ needs.check-version.outputs.version }}
-          body: |
-            Download `auto-mcgraw-brave-chrome.zip` for Brave or Chrome.
-            The Firefox XPI is unsigned and intended for temporary loading through `about:debugging`; standard Firefox requires Mozilla signing for permanent installation.
-
-            Changes in this release:
-            
-            ${{ steps.changelog.outputs.CHANGELOG }}
-          files: |
-            auto-mcgraw-brave-chrome.zip
-            auto-mcgraw-firefox-unsigned.xpi
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: browser-release-candidates
+          if-no-files-found: error
+          path: |
+            auto-mcgraw-firefox-*-unsigned.xpi
+            auto-mcgraw-chrome-brave-*-experimental.zip
+            SHA256SUMS.txt

@@ -10,6 +10,36 @@ document.addEventListener("DOMContentLoaded", function () {
 
   footerVersionElement.textContent = `v${chrome.runtime.getManifest().version}`;
 
+  document.getElementById("allow-question-images").addEventListener("click", async () => {
+    const status = document.getElementById("image-permission-status");
+    try {
+      const allowed = await (globalThis.browser ?? chrome).permissions.request({
+        origins: ["https://smartfactory-api.prod.mheducation.com/*"],
+      });
+      status.textContent = allowed ? "Question image access enabled." : "Image access was not enabled.";
+    } catch {
+      status.textContent = "Could not request image access. Check this add-on's site permissions in Firefox.";
+    }
+  });
+
+  document.getElementById("export-diagnostics").addEventListener("click", async () => {
+    const status = document.getElementById("diagnostics-status");
+    try {
+      const result = await (globalThis.browser ?? chrome).runtime.sendMessage({ type: "getDiagnostics" });
+      if (!result?.received) throw new Error("Diagnostic export unavailable");
+      const blob = new Blob([JSON.stringify({ extensionVersion: chrome.runtime.getManifest().version, ...result }, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `auto-mcgraw-diagnostics-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      status.textContent = `Saved ${result.events.length} diagnostic events.`;
+    } catch {
+      status.textContent = "Could not save diagnostics. Reopen settings and try again.";
+    }
+  });
+
   chrome.storage.sync.get("aiModel", function (data) {
     const currentModel = data.aiModel || "chatgpt";
 

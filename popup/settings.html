@@ -109,8 +109,8 @@
             <div class="toggle-label">
               <h3>Switch Between Tabs</h3>
               <p>
-                Show the AI tab while asking, then return when both tabs share a
-                window
+                Show the AI tab until its answer is ready, then return to your question,
+                even across windows
               </p>
             </div>
           </label>
@@ -155,6 +155,19 @@
           </label>
         </div>
       </div>
+
+      <section>
+        <h2>Question images</h2>
+        <p>Allow this extension to read diagrams from McGraw's image server and attach them to ChatGPT.</p>
+        <button id="allow-question-images" type="button">Allow question images</button>
+        <p id="image-permission-status" role="status"></p>
+      </section>
+      <section>
+        <h2>Diagnostics</h2>
+        <p>Last 300 extension events, stored locally. No question text, answers, or login data.</p>
+        <button id="export-diagnostics" type="button">Save diagnostic log</button>
+        <p id="diagnostics-status" role="status"></p>
+      </section>
 
       <footer>
         <p>Auto-McGraw <span id="footer-version">Loading...</span> fork by LaAutista</p>

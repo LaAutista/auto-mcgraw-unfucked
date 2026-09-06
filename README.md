@@ -1,97 +1,85 @@
-<div align="center">
+# auto-mcgraw-unfucked
 
-# Auto-McGraw (Smartbook)
+A Firefox-first community fork of [GooglyBlox/auto-mcgraw](https://github.com/GooglyBlox/auto-mcgraw), maintained by LaAutista. Fixes unreliable ChatGPT answer capture, tab switching, duplicate question requests, diagram questions, and matching-choice parsing in McGraw Hill SmartBook.
 
-<img src="assets/icon.png" alt="Auto-McGraw Logo" width="200">
+## Release status
 
-[![Release](https://img.shields.io/github/v/release/LaAutista/auto-mcgraw-unfucked?include_prereleases&style=flat-square&cache=1)](https://github.com/LaAutista/auto-mcgraw-unfucked/releases)
-[![License](https://img.shields.io/github/license/LaAutista/auto-mcgraw-unfucked?style=flat-square&cache=1)](LICENSE)
-[![Downloads](https://img.shields.io/github/downloads/LaAutista/auto-mcgraw-unfucked/total?style=flat-square&cache=1)](https://github.com/LaAutista/auto-mcgraw-unfucked/releases)
+**v2.12.3 is this fork's first maintained release.** It keeps the version of the verified Firefox build; earlier trial releases are retired. See [release notes](RELEASE_NOTES.md) for the fixes and validation limits.
 
-*Automate your McGraw Hill Smartbook homework with AI integration (ChatGPT, Gemini & DeepSeek)*
+Firefox with ChatGPT is the live-tested combination. The monitored assignment finished at **27/27 concepts with 100% accuracy** after repairs during the run. The final v2.12.3 build covered the last four concepts, not a fresh, uninterrupted 27-concept run. Chrome/Brave packaging is experimental and has not been runtime-tested.
 
-[Installation](#installation) • [Usage](#usage) • [Settings](#settings) • [Privacy](#privacy) • [Issues](#issues)
-
-</div>
-
-> [!NOTE]
-> This is LaAutista's community fork of
-> [GooglyBlox/auto-mcgraw](https://github.com/GooglyBlox/auto-mcgraw). It adds
-> more reliable AI response handling plus Connect, EZTO, and MuzzyLane support.
-
----
-
-## Public Service Announcement
-
-**⚠️ Auto-McGraw is not published on the Chrome Web Store.** This GitHub repository is the only official place to download the extension. We've seen fraudulent/unofficial reuploads of Auto-McGraw appear on the Chrome Web Store — these are not affiliated with this project and we cannot vouch for their safety or integrity. Only install from this repository's [releases page](https://github.com/LaAutista/auto-mcgraw-unfucked/releases).
-
----
+This fork is not published on browser extension stores. Download packages from this repository's [releases page](https://github.com/LaAutista/auto-mcgraw-unfucked/releases).
 
 ## Installation
 
-### Brave or Chrome
+### Firefox — primary build
 
-1. Download `auto-mcgraw-brave-chrome.zip` from the [releases page](https://github.com/LaAutista/auto-mcgraw-unfucked/releases)
-2. Extract the zip file to a folder
-3. Open `brave://extensions/` or `chrome://extensions/`
-4. Enable "Developer mode" in the top right
-5. Click "Load unpacked" and select the extracted folder
+Requires Firefox 140 or newer.
 
-### Firefox
+1. Download [auto-mcgraw-firefox-2.12.3-unsigned.xpi](https://github.com/LaAutista/auto-mcgraw-unfucked/releases/download/v2.12.3/auto-mcgraw-firefox-2.12.3-unsigned.xpi).
+2. Open `about:debugging#/runtime/this-firefox`.
+3. Click **Load Temporary Add-on** and select the XPI.
+4. Refresh existing SmartBook and ChatGPT tabs after installing or upgrading.
 
-1. Download `auto-mcgraw-firefox-unsigned.xpi` from the [releases page](https://github.com/LaAutista/auto-mcgraw-unfucked/releases)
-2. Open `about:debugging#/runtime/this-firefox`
-3. Click "Load Temporary Add-on" and select the XPI
+The XPI is unsigned. Temporary installation ends when Firefox restarts; reload it through `about:debugging` afterward. Permanent installation in standard Firefox requires a Mozilla-signed XPI. This release does not bypass signing requirements.
 
-The temporary Firefox installation lasts until Firefox restarts. Permanent
-installation in standard Firefox requires a Mozilla-signed XPI. Firefox 140 or
-newer is required.
+For diagram questions, open extension settings and click **Allow question images** if Firefox has not granted access to McGraw's image server.
+
+### Chrome / Brave — experimental, untested
+
+Requires Chromium 121 or newer (including a corresponding Brave version).
+
+1. Download [auto-mcgraw-chrome-brave-2.12.3-experimental.zip](https://github.com/LaAutista/auto-mcgraw-unfucked/releases/download/v2.12.3/auto-mcgraw-chrome-brave-2.12.3-experimental.zip) and extract it.
+2. Open `chrome://extensions/` or `brave://extensions/`.
+3. Enable **Developer mode**, click **Load unpacked**, and select the extracted folder.
+
+This package is provided for testing, not as a verified equivalent of the Firefox build.
+
+## What was fixed
+
+- **Ask does nothing after blocking dialogs:** the explicit Ask button starts directly, without a browser confirmation popup. Errors and manual-pause instructions stay visible on the page.
+- **ChatGPT answers are missed or captured incorrectly:** waits for completed, settled JSON; rejects observed animation artifacts; tracks message IDs; ignores empty trailing assistant placeholders; verifies that prompts actually send.
+- **Tab switching stalls:** activates tabs even when window focus is denied and keeps ChatGPT foregrounded until its answer is ready.
+- **Repeated questions after grading:** excludes correctness labels from choices and waits for an actual question transition before requesting another answer.
+- **Diagram questions and empty answers:** attaches up to four supported McGraw diagrams to ChatGPT, includes accessible descriptions, and makes upload failures or empty answers visible instead of retrying forever.
+- **Broken matching choices:** preserves semicolons and commas within exact choices and rejects ambiguous partial matches.
+- **Failures without useful diagnostics:** keeps the last 300 diagnostic events locally, with an export button in settings.
 
 ## Usage
 
-1. Log into your McGraw Hill account and open a Smartbook assignment
-2. Log into one of the supported AI assistants in another tab:
-   - [ChatGPT](https://chatgpt.com)
-   - [Gemini](https://gemini.google.com)
-   - [DeepSeek](https://chat.deepseek.com)
-3. Click the "Ask [AI Model]" button that appears in your Smartbook header
-4. Click "OK" when prompted to begin automation
-5. Watch as the extension:
-   - Sends questions to your chosen AI assistant
-   - Processes the responses
-   - Automatically fills in answers
-   - Handles multiple choice, true/false, fill-in-the-blank, and matching questions
-      - **Note about matching questions:** Matching questions now attempt full automation. If a strict, reliable match cannot be completed, the extension will show AI-suggested matches in an alert, pause, and let you finish manually before resuming on the next question.
-   - Navigates through forced learning sections when needed
+1. Open a SmartBook assignment while logged into McGraw Hill.
+2. Open [ChatGPT](https://chatgpt.com) in another tab and log in.
+3. In extension settings, select ChatGPT and leave **Switch Between Tabs** enabled for the tested workflow.
+4. Click **Ask ChatGPT** in the SmartBook header. The extension sends the question, collects the answer, and fills it. With **Pause Before Submit** off, it also submits and advances.
 
-Click "Stop Automation" at any time to pause the process.
+Use **Pause Before Submit** to review filled answers yourself. Click **Stop Automation** to stop. If an answer cannot be matched safely, follow the on-page manual-pause instructions; automation can resume after you advance manually.
 
-## Settings
+Gemini, DeepSeek, EZTO, and MuzzyLane support remain in the source, but were not separately live-validated for this release. Diagram attachments currently require ChatGPT. AI answers can still be wrong, and site changes can break automation.
 
-Click the settings icon ( <img src="assets/settings-icon.svg" alt="Settings Icon" style="vertical-align: middle; width: 16px; height: 16px;"> ) next to the main button to access the settings menu, where you can:
+## Diagnostics and privacy
 
-- Choose between **ChatGPT**, **Gemini**, or **DeepSeek** for answering questions
-- See the status of your AI assistant connections
-- Check if your selected AI assistant is ready to use
+Open settings and click **Save diagnostic log** to export the local 300-event log. It contains request, answer-delivery, navigation, and error metadata—not question text, answer text, images, or login data. Review any export before sharing it publicly.
 
-The extension will automatically use your selected AI model for all future automation sessions.
+The extension reads visible assignment content and sends it to the selected AI service through that service's browser tab. Supported question images are fetched from McGraw and attached to ChatGPT. No analytics server or data collection endpoint operated by LaAutista is used. Settings use browser sync storage; diagnostics stay in local extension storage. The selected AI service's privacy policy applies to the content it receives.
 
-## Privacy
+## Development
 
-Auto-McGraw reads visible assignment content and sends it to the AI service you
-select by entering it in that service's browser tab. It does not send data to
-LaAutista or use an analytics server. Extension settings are stored with the
-browser's sync storage. The selected AI service's privacy policy applies to the
-content sent to it.
+Run all 12 regression test files with Node.js:
 
-## Disclaimer
+```sh
+node --test tests/*.test.mjs
+```
 
-This tool is for educational purposes only. Use it responsibly and be aware of your institution's academic integrity policies.
+Passing these tests does not establish compatibility with every course, browser, or future site layout.
 
-Auto-McGraw is an independent project and is not affiliated with, endorsed by, sponsored by, or otherwise associated with McGraw Hill or any of its related entities.
+The manually triggered **Build Release Candidates** GitHub workflow runs these
+tests and creates browser packages with checksums. It does not publish releases
+or replace previously tested downloads.
 
-Any third-party names, trademarks, logos, assets, or likenesses referenced or displayed by this project remain the property of their respective owners and copyright holders.
+## Credits and license
 
-## Issues
+Based on [GooglyBlox/auto-mcgraw](https://github.com/GooglyBlox/auto-mcgraw). The original GooglyBlox copyright notice and [MIT license](LICENSE) are preserved.
 
-Found a bug? [Create an issue](https://github.com/LaAutista/auto-mcgraw-unfucked/issues).
+This independent project is not affiliated with or endorsed by McGraw Hill, OpenAI, or other named services. Third-party names and assets belong to their respective owners. Use responsibly and follow your institution's academic-integrity policies.
+
+Found a bug? [Open an issue](https://github.com/LaAutista/auto-mcgraw-unfucked/issues) with the browser, extension version, and relevant diagnostic events.
