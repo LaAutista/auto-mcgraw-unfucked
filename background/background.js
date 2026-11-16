@@ -1,21 +1,12 @@
 let mheTabId = null;
 let aiTabId = null;
-let aiType = null;
 let processingQuestion = false;
 let queuedRestart = null;
 let allowQueuedRestart = false;
 let mheWindowId = null;
 let aiWindowId = null;
-let duplicateTabId = null;
-let originalTabId = null;
-let storedResponse = null;
-let isProcessingDuplicate = false;
-let pendingResponse = null;
 const promiseApi = globalThis.browser ?? chrome;
 const REQUEST_KEY_PREFIX = "autoMcGrawRequest:";
-const DEEPSEEK_URL_PATTERNS = [
-  "https://chat.deepseek.com/*",
-];
 const DIAGNOSTICS_KEY = "autoMcGrawDiagnostics";
 const DIAGNOSTICS_LIMIT = 300;
 const DIAGNOSTIC_NUMBER_FIELDS = new Set([
@@ -46,8 +37,8 @@ const DIAGNOSTIC_CATEGORIES = {
 };
 const DIAGNOSTIC_HOSTS = new Set([
   "learning.mheducation.com", "ezto.mheducation.com", "connect.mheducation.com",
-  "newconnect.mheducation.com", "chatgpt.com", "gemini.google.com",
-  "chat.deepseek.com", "deepseek.chat", "sfc.muzzylane.com",
+  "newconnect.mheducation.com", "chatgpt.com",
+  "sfc.muzzylane.com",
 ]);
 let diagnosticsWrites = Promise.resolve();
 
@@ -96,10 +87,6 @@ function diagnosticSource(sender) {
   } catch {
     return null;
   }
-}
-
-function isDeepSeekTabUrl(url = "") {
-  return url.includes("chat.deepseek.com") || url.includes("deepseek.chat");
 }
 
 function storeAiTab(tabs, preferredWindowId) {
@@ -188,24 +175,8 @@ async function findAndStoreTabs(preferredWindowId) {
     mheWindowId = mheTabs[0].windowId;
   }
 
-  const data = await promiseApi.storage.sync.get("aiModel");
-  const aiModel = data.aiModel || "chatgpt";
-  aiType = aiModel;
-
-  if (aiModel === "chatgpt") {
-    const tabs = await promiseApi.tabs.query({ url: "https://chatgpt.com/*" });
-    storeAiTab(tabs, preferredWindowId);
-  } else if (aiModel === "gemini") {
-    const tabs = await promiseApi.tabs.query({
-      url: "https://gemini.google.com/*",
-    });
-    storeAiTab(tabs, preferredWindowId);
-  } else if (aiModel === "deepseek") {
-    const tabs = await promiseApi.tabs.query({
-      url: DEEPSEEK_URL_PATTERNS,
-    });
-    storeAiTab(tabs, preferredWindowId);
-  }
+  const tabs = await promiseApi.tabs.query({ url: "https://chatgpt.com/*" });
+  storeAiTab(tabs, preferredWindowId);
 }
 
 async function shouldFocusTabs() {
@@ -313,7 +284,7 @@ async function processQuestion(message) {
       if (!allowQueuedRestart && !queuedRestart) {
         await sendMessageWithRetry(mheTabId, {
           type: "alertMessage",
-          message: `Please open ${aiType} in another tab before using automation.`,
+          message: `Please open ChatGPT in another tab before using automation.`,
         });
       }
       if (!allowQueuedRestart && !queuedRestart) {
@@ -322,7 +293,7 @@ async function processQuestion(message) {
       return;
     }
 
-    const question = await resolveQuestionImages(message.question, aiType, requestId);
+    const question = await resolveQuestionImages(message.question, "chatgpt", requestId);
     const switchTabs = await shouldFocusTabs();
 
     if (switchTabs) {
@@ -347,9 +318,9 @@ async function processQuestion(message) {
       if (!aiResponse.stale && !allowQueuedRestart && !queuedRestart) {
         await sendMessageWithRetry(mheTabId, {
           type: "alertMessage",
-          message: `Could not enter the question into ${aiType}: ${
+          message: `Could not enter the question into ChatGPT: ${
             aiResponse.error || "unknown error"
-          }. Check the ${aiType} tab.`,
+          }. Check the ChatGPT tab.`,
         });
         await sendMessageWithRetry(mheTabId, { type: "stopAutomation" });
       }
@@ -363,7 +334,7 @@ async function processQuestion(message) {
     if (mheTabId && !allowQueuedRestart && !queuedRestart) {
       await sendMessageWithRetry(mheTabId, {
         type: "alertMessage",
-        message: `Error communicating with ${aiType}: ${error.message || "unknown error"}. Please check the assistant tab.`,
+        message: `Error communicating with ChatGPT: ${error.message || "unknown error"}. Please check the assistant tab.`,
       });
       if (!allowQueuedRestart && !queuedRestart) {
         await sendMessageWithRetry(mheTabId, { type: "stopAutomation" });
@@ -396,8 +367,6 @@ async function processResponse(message) {
   recordDiagnostic("response.route", message.requestId, { targetTabId, windowId: request.windowId });
 
   try {
-    pendingResponse = message.response;
-
     const switchTabs = await shouldFocusTabs();
 
     if (switchTabs) {
@@ -440,26 +409,6 @@ async function processResponse(message) {
   }
 }
 
-async function waitForTabReady(tabId, maxAttempts = 8) {
-  for (let i = 0; i < maxAttempts; i++) {
-    try {
-      await promiseApi.tabs.get(tabId);
-
-      await sendMessageWithRetry(tabId, { type: "ping" }, 1, 300);
-
-      const tab = await promiseApi.tabs.get(tabId);
-      if (tab.status === "complete") {
-        await new Promise((resolve) => setTimeout(resolve, 300));
-        return true;
-      }
-    } catch (error) {
-      console.log(`Tab ${tabId} not ready, attempt ${i + 1}:`, error);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-  return false;
-}
-
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Telemetry must not change the provider/source tab selected by an active request.
   if (message.type === "diagnosticEvent") {
@@ -493,22 +442,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sender.tab.url.includes("ezto.mheducation.com") ||
       sender.tab.url.includes("connect.mheducation.com")
     ) {
-      if (!originalTabId && !duplicateTabId) {
-        mheTabId = sender.tab.id;
-        mheWindowId = sender.tab.windowId;
-      }
+      mheTabId = sender.tab.id;
+      mheWindowId = sender.tab.windowId;
     } else if (sender.tab.url.includes("chatgpt.com")) {
       aiTabId = sender.tab.id;
       aiWindowId = sender.tab.windowId;
-      aiType = "chatgpt";
-    } else if (sender.tab.url.includes("gemini.google.com")) {
-      aiTabId = sender.tab.id;
-      aiWindowId = sender.tab.windowId;
-      aiType = "gemini";
-    } else if (isDeepSeekTabUrl(sender.tab.url || "")) {
-      aiTabId = sender.tab.id;
-      aiWindowId = sender.tab.windowId;
-      aiType = "deepseek";
     }
   }
 
@@ -526,11 +464,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (
-    message.type === "chatGPTResponse" ||
-    message.type === "geminiResponse" ||
-    message.type === "deepseekResponse"
-  ) {
+  if (message.type === "chatGPTResponse") {
     processResponse(message)
       .then(sendResponse)
       .catch((error) =>
@@ -539,66 +473,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message.type === "createDuplicateTab") {
-    originalTabId = sender.tab.id;
-    storedResponse = pendingResponse;
-
-    chrome.tabs.duplicate(sender.tab.id, async (newTab) => {
-      duplicateTabId = newTab.id;
-
-      const isReady = await waitForTabReady(duplicateTabId);
-
-      if (isReady) {
-        try {
-          await sendMessageWithRetry(duplicateTabId, {
-            type: "processDuplicateTab",
-            response: storedResponse,
-          });
-        } catch (error) {
-          console.error("Error sending message to duplicate tab:", error);
-        }
-      } else {
-        console.error("Duplicate tab failed to become ready");
-      }
-    });
-    sendResponse({ received: true });
-    return true;
-  }
-
-  if (message.type === "closeDuplicateTab") {
-    if (duplicateTabId) {
-      if (originalTabId) {
-        focusTab(originalTabId);
-      }
-
-      chrome.tabs.remove(duplicateTabId, () => {
-        duplicateTabId = null;
-        isProcessingDuplicate = false;
-      });
-    }
-    sendResponse({ received: true });
-    return true;
-  }
-
-  if (message.type === "finishDoubleCredit") {
-    if (originalTabId) {
-      sendMessageWithRetry(originalTabId, {
-        type: "completeDoubleCredit",
-      });
-    }
-    sendResponse({ received: true });
-    return true;
-  }
-
   if (message.type === "resetTabTracking") {
     recordDiagnostic("request.cancel", message.requestId);
     queuedRestart = null;
     allowQueuedRestart = true;
-    duplicateTabId = null;
-    originalTabId = null;
-    storedResponse = null;
-    isProcessingDuplicate = false;
-    pendingResponse = null;
     const cancelProvider =
       message.requestId && aiTabId
         ? sendMessageWithRetry(
@@ -635,12 +513,4 @@ findAndStoreTabs();
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (tabId === mheTabId) mheTabId = null;
   if (tabId === aiTabId) aiTabId = null;
-  if (tabId === duplicateTabId) {
-    duplicateTabId = null;
-    isProcessingDuplicate = false;
-  }
-  if (tabId === originalTabId) {
-    originalTabId = null;
-    storedResponse = null;
-  }
 });

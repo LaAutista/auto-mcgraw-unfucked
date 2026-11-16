@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Auto-McGraw Smartbook",
-  "version": "2.12.3",
-  "description": "Transfers a question from MHEducation's Smartbook to AI assistants and then uses their response to auto‐select an answer.",
+  "version": "3.0",
+  "description": "Transfers a question from MHEducation's Smartbook to ChatGPT and uses its response to auto‐select an answer.",
   "permissions": ["tabs", "storage"],
   "host_permissions": [
     "https://learning.mheducation.com/*",
@@ -12,10 +12,7 @@
     "https://newconnect.mheducation.com/*",
     "https://author.muzzylane.com/*",
     "https://sfc.muzzylane.com/*",
-    "https://chatgpt.com/*",
-    "https://gemini.google.com/*",
-    "https://chat.deepseek.com/*",
-    "https://deepseek.chat/*"
+    "https://chatgpt.com/*"
   ],
   "background": {
     "scripts": ["background/background.js"],
@@ -49,14 +46,6 @@
     {
       "matches": ["https://chatgpt.com/*"],
       "js": ["content-scripts/chatgpt.js"]
-    },
-    {
-      "matches": ["https://gemini.google.com/*"],
-      "js": ["content-scripts/gemini.js"]
-    },
-    {
-      "matches": ["https://chat.deepseek.com/*"],
-      "js": ["content-scripts/deepseek.js"]
     },
     {
       "matches": ["https://sfc.muzzylane.com/*"],

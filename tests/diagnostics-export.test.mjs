@@ -12,6 +12,7 @@ let clicked = false;
 let fail = false;
 const link = { click() { clicked = true; } };
 const api = {
+  tabs: { query(_query, callback) { callback([]); } },
   permissions: { request: async ({ origins }) => {
     assert.deepEqual(Array.from(origins), ["https://smartfactory-api.prod.mheducation.com/*"]);
     return true;

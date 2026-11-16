@@ -10,7 +10,7 @@ const context = vm.createContext({
   chrome: { runtime: { onMessage: { addListener() {} } } },
   document: {
     getElementById: () => liveInput,
-    querySelector: () => null,
+    querySelector: (selector) => selector.includes("#prompt-textarea") ? liveInput : null,
     querySelectorAll: () => posts,
   },
   oldInput,

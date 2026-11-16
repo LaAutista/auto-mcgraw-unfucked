@@ -1,5 +1,10 @@
 console.log("[Auto-McGraw][chatgpt] content script LOADED — marker v2");
 const promiseApi = globalThis.browser ?? chrome;
+const COMPOSER_SELECTOR = '#prompt-textarea, [data-composer-markdown][contenteditable="true"]';
+const SEND_SELECTOR = '[data-testid="send-button"]:not(:disabled), form button[aria-label="Send"]:not(:disabled)';
+const STOP_SELECTOR = '[data-testid="stop-button"], form button[aria-label="Stop"]';
+const ASSISTANT_SELECTOR = '[data-message-author-role="assistant"], [data-chatgpt-search-unit-key$=":assistant"]';
+const USER_SELECTOR = '[data-message-author-role="user"], [data-chatgpt-search-unit-key$=":user"]';
 let hasResponded = false;
 let activeRequestId = null;
 let messageCountAtQuestion = 0;
@@ -88,7 +93,7 @@ function waitForIdle(requestId = activeRequestId, timeout = 120000) {
       if (requestId !== activeRequestId) {
         clearInterval(interval);
         resolve(false);
-      } else if (!document.querySelector('[data-testid="stop-button"]')) {
+      } else if (!document.querySelector(STOP_SELECTOR)) {
         clearInterval(interval);
         resolve(true);
       } else if (Date.now() - startTime > timeout) {
@@ -169,14 +174,15 @@ async function insertQuestion(questionData, requestId = activeRequestId) {
   if (!(await waitForIdle(requestId))) return false;
   if (requestId !== activeRequestId) return false;
   const existingAssistantMessages = Array.from(document.querySelectorAll(
-    '[data-message-author-role="assistant"]'
+    ASSISTANT_SELECTOR
   ));
   messageCountAtQuestion = existingAssistantMessages.length;
   assistantMessagesAtQuestion = new Set(
     existingAssistantMessages.map(getAssistantMessageKey)
   );
 
-  const inputArea = document.getElementById("prompt-textarea");
+  const inputArea = await waitForSelector(COMPOSER_SELECTOR);
+  if (requestId !== activeRequestId) return false;
   if (!inputArea) throw new Error("Input area not found");
 
   if (questionData.images?.length) {
@@ -214,7 +220,7 @@ async function attachQuestionImages(inputArea, images, requestId) {
   while (Date.now() < deadline) {
     if (requestId !== activeRequestId) return false;
     // The file input accepting a FileList is not proof the app uploaded it.
-    const send = form.querySelector('[data-testid="send-button"]');
+    const send = form.querySelector(SEND_SELECTOR);
     if (previews().length === images.length && send && !send.disabled &&
         !form.querySelector('[role="progressbar"], [aria-busy="true"]')) {
       recordDiagnostic("images.attached", { optionCount: images.length });
@@ -265,10 +271,10 @@ function pressEnter(inputArea) {
 // Did the message actually go out? The composer clears on send, and ChatGPT
 // shows a stop button while generating — either one confirms success.
 function looksSent(inputArea, previousUserMessages = new Set()) {
-  const liveInput = document.getElementById("prompt-textarea") || inputArea;
+  const liveInput = document.querySelector(COMPOSER_SELECTOR) || inputArea;
   const stillHasText = (liveInput.innerText || "").trim().length > 0;
-  const generating = !!document.querySelector('[data-testid="stop-button"]');
-  const newUserMessage = Array.from(document.querySelectorAll('[data-message-author-role="user"]'))
+  const generating = !!document.querySelector(STOP_SELECTOR);
+  const newUserMessage = Array.from(document.querySelectorAll(USER_SELECTOR))
     .some((message) => !previousUserMessages.has(getAssistantMessageKey(message)));
   return generating || !stillHasText || newUserMessage;
 }
@@ -278,14 +284,16 @@ function looksSent(inputArea, previousUserMessages = new Set()) {
 // send, falls back to Enter, and retries before giving up.
 async function submitToComposer(inputArea, text, requestId = activeRequestId) {
   const previousUserMessages = new Set(Array.from(
-    document.querySelectorAll('[data-message-author-role="user"]'), getAssistantMessageKey
+    document.querySelectorAll(USER_SELECTOR), getAssistantMessageKey
   ));
   for (let attempt = 1; attempt <= 3; attempt++) {
     if (requestId !== activeRequestId) return false;
-    inputArea = document.getElementById("prompt-textarea") || inputArea;
+    inputArea = document.querySelector(COMPOSER_SELECTOR) || inputArea;
     setComposerText(inputArea, text);
+    // Let the editor commit its input state before clicking an already-enabled Send.
+    await sleep(150);
 
-    const sendButton = await waitForSelector('[data-testid="send-button"]:not(:disabled)', 12000);
+    const sendButton = await waitForSelector(SEND_SELECTOR, 12000);
     if (requestId !== activeRequestId) return false;
     if (sendButton) {
       sendButton.click();
@@ -317,13 +325,14 @@ async function submitToComposer(inputArea, text, requestId = activeRequestId) {
 // Returns the JSON string if found, or null while the model is still
 // thinking / streaming (e.g. the message just says "Thinking").
 function getAssistantMessageKey(message) {
-  return message.getAttribute("data-message-id") || message;
+  return message.getAttribute("data-message-id") ||
+    message.getAttribute("data-chatgpt-search-message-ids") || message;
 }
 
 function getLatestAnswerJson() {
-  if (document.querySelector('[data-testid="stop-button"]')) return null;
+  if (document.querySelector(STOP_SELECTOR)) return null;
   const messages = document.querySelectorAll(
-    '[data-message-author-role="assistant"]'
+    ASSISTANT_SELECTOR
   );
   // Image replies can leave an empty assistant placeholder after the finished
   // message. Ignore only empty shells, never a newer nonempty thinking reply.

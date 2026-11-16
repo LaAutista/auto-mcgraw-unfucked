@@ -319,21 +319,10 @@ function showToast(text) {
 }
 
 function updateButtonText() {
-  chrome.storage.sync.get("aiModel", function (data) {
-    const aiModel = data.aiModel || "chatgpt";
-    let modelName = "ChatGPT";
-
-    if (aiModel === "gemini") {
-      modelName = "Gemini";
-    } else if (aiModel === "deepseek") {
-      modelName = "DeepSeek";
-    }
-
-    const btn = document.querySelector(".automcgraw-sim-btn");
-    if (btn && !isAutomating) {
-      btn.textContent = `Ask ${modelName}`;
-    }
-  });
+  const btn = document.querySelector(".automcgraw-sim-btn");
+  if (btn && !isAutomating) {
+    btn.textContent = "Ask ChatGPT";
+  }
 }
 
 function addAssistantButton() {

@@ -29,9 +29,9 @@ const context = vm.createContext({
     body: {},
     getElementById: () => ({}),
     querySelector: (selector) =>
-      selector === '[data-testid="stop-button"]' && generating ? {} : null,
+      selector.includes("#prompt-textarea") || (selector.includes('[data-testid="stop-button"]') && generating) ? {} : null,
     querySelectorAll: (selector) =>
-      selector === '[data-message-author-role="assistant"]' ? messages : [],
+      selector.includes('[data-message-author-role="assistant"]') ? messages : [],
   },
   chrome: { runtime: { onMessage: { addListener: (fn) => { listener = fn; } } } },
   browser: {

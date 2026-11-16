@@ -8,8 +8,6 @@ const manifest = JSON.parse(read("manifest.json"));
 const response = '{"answer":"same","explanation":"same"}';
 const providers = [
   ["chatgpt.js", '[data-message-author-role="assistant"]'],
-  ["gemini.js", "model-response"],
-  ["deepseek.js", "[data-testid='chat-message-assistant']"],
 ];
 
 let nextMessageId = 0;
@@ -34,9 +32,9 @@ for (const [file, messageSelector] of providers) {
     assistantMessages: messages,
     document: {
       getElementById: () => ({}),
-      querySelector: (selector) => selector === '[data-testid="stop-button"]' ? null : ({}),
+      querySelector: (selector) => selector.includes('[data-testid="stop-button"]') ? null : ({}),
       querySelectorAll: (selector) =>
-        selector === messageSelector ? messages : [],
+        selector.includes(messageSelector) ? messages : [],
     },
     chrome: {
       runtime: {
@@ -978,7 +976,7 @@ async function testSortableRankingRoundTrip() {
     querySelectorAll(selector) {
       if (
         selector ===
-        ".sortable-component .vertical-list .choice-item[data-react-beautiful-dnd-draggable]"
+        ".sortable-component .vertical-list .choice-item[data-react-beautiful-dnd-draggable], .sortable-component .vertical-list .choice-item[draggable=true][data-index]"
       ) {
         return items;
       }
@@ -1046,6 +1044,84 @@ async function testSortableRankingRoundTrip() {
     context
   );
   assert.deepEqual(items.map(({ text }) => text), targetOrder);
+
+  // SmartBook also uses native HTML drag events and an upper-edge drop for insertion.
+  context.DataTransfer = class {};
+  context.DragEvent = FakeMouseEvent;
+  const nativeEvents = [];
+  const nativeSelector = ".choice-item[draggable=true][data-index]";
+  for (const item of items) {
+    item.matches = (selector) => selector === nativeSelector;
+    item.dispatchEvent = (event) => {
+      nativeEvents.push(event.type);
+      if (event.type === "dragstart") event.dataTransfer.source = item;
+      if (event.type === "drop") {
+        const rect = item.getBoundingClientRect();
+        assert.ok(event.clientY < rect.top + rect.height / 2);
+        const destination = items.indexOf(item);
+        items.splice(destination, 0, items.splice(items.indexOf(event.dataTransfer.source), 1)[0]);
+      }
+      return true;
+    };
+  }
+  items.reverse();
+  context.targetOrder = targetOrder;
+  const applyNative = (expression) => vm.runInContext(expression, context);
+  assert.equal(await applyNative('applyRankingAnswer(document.querySelector(".probe-container"), [])'), false);
+  assert.equal(nativeEvents.length, 0);
+  assert.equal(await applyNative('applyRankingAnswer(document.querySelector(".probe-container"), targetOrder)'), true);
+  assert.deepEqual(items.map((item) => item.text), targetOrder);
+  assert.deepEqual(nativeEvents.slice(0, 5), ["dragstart", "dragenter", "dragover", "drop", "dragend"]);
+
+  const pool = [];
+  const slots = ["Hot", "Cool"].map((prompt) => {
+    const slot = {
+      item: null,
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 40, height: 40 }),
+      dispatchEvent(event) {
+        if (event.type === "drop") {
+          slot.item = event.dataTransfer.source;
+          pool.splice(pool.indexOf(slot.item), 1);
+        }
+      },
+      querySelector(selector) {
+        return selector === ".droppableContainer" ? slot :
+          selector.includes(".draggableItem[data-item-key]") ? slot.item : null;
+      },
+    };
+    return { slot, row: { querySelector(selector) {
+      return selector === ".match-prompt .content" ? elementNode(prompt) :
+        selector.includes(".match-single-response-wrapper") ? { querySelectorAll: () => [slot] } : null;
+    } } };
+  });
+  const matching = { querySelectorAll(selector) {
+    if (selector === ".responses-container .match-row") return slots.map(({ row }) => row);
+    if (selector.includes(".choices-container .draggableItem[data-item-key]")) return pool;
+    if (selector.includes(".draggableItem[data-item-key]")) return [...pool, ...slots.map(({ slot }) => slot.item).filter(Boolean)];
+    return [];
+  } };
+  context.matchContainer = {
+    querySelector(selector) {
+      if (selector === ".matching-component" || selector === ".awd-probe-type-matching") return matching;
+      if (selector === ".prompt") return elementNode("Match each temperature.");
+      return null;
+    },
+    querySelectorAll() { return []; },
+  };
+  assert.equal(applyNative("parseQuestion(matchContainer)"), null, "sent a matching question without choices");
+  for (const label of ["Molecular lines", "Weak hydrogen lines"]) {
+    pool.push({
+      matches: (selector) => selector === ".draggableItem[data-item-key]",
+      querySelector: (selector) => selector === ".dragItemContent" ? elementNode(label) : null,
+      getBoundingClientRect: () => ({ left: 0, top: 90, width: 40, height: 40 }),
+      dispatchEvent(event) { if (event.type === "dragstart") event.dataTransfer.source = this; },
+    });
+  }
+  assert.deepEqual(JSON.parse(applyNative("JSON.stringify(parseQuestion(matchContainer).options)")), {
+    prompts: ["Hot", "Cool"], choices: ["Molecular lines", "Weak hydrogen lines"],
+  });
+  assert.equal(await applyNative('applyMatchingAnswer(matchContainer, ["Hot -> Weak hydrogen lines", "Cool -> Molecular lines"])'), true);
+  assert.equal(pool.length, 0);
 
   const multiSlotTargets = JSON.parse(
     vm.runInContext(

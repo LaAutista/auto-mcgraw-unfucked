@@ -2,11 +2,8 @@ let messageListener = null;
 let isAutomating = false;
 let lastIncorrectQuestion = null;
 let lastCorrectAnswer = null;
-let doubleCreditMode = false;
 let randomConfidence = false;
 let pauseBeforeSubmit = false;
-let waitingForDuplicateCompletion = false;
-let currentResponse = null;
 let matchingPauseIntervalId = null;
 let activeQuestionRequestId = null;
 let lastQueuedQuestionSignature = "";
@@ -36,16 +33,12 @@ function showAutomationStatus(message, urgent = false) {
   status.textContent = `Auto-McGraw: ${message}`;
 }
 
-chrome.storage.sync.get(["doubleCreditMode", "randomConfidence", "pauseBeforeSubmit"], function (data) {
-  doubleCreditMode = data.doubleCreditMode || false;
+chrome.storage.sync.get(["randomConfidence", "pauseBeforeSubmit"], function (data) {
   randomConfidence = data.randomConfidence || false;
   pauseBeforeSubmit = data.pauseBeforeSubmit || false;
 });
 
 chrome.storage.onChanged.addListener((changes) => {
-  if (changes.doubleCreditMode) {
-    doubleCreditMode = changes.doubleCreditMode.newValue;
-  }
   if (changes.randomConfidence) {
     randomConfidence = changes.randomConfidence.newValue;
   }
@@ -81,34 +74,21 @@ function setupMessageListener() {
 
     if (message.type === "processChatGPTResponse") {
       if (
-        !message.isDuplicateTab &&
-        (!isAutomating ||
-          !message.requestId ||
-          message.requestId !== activeQuestionRequestId)
+        !isAutomating ||
+        !message.requestId ||
+        message.requestId !== activeQuestionRequestId
       ) {
         sendResponse({ received: false, stale: true });
         return true;
       }
-      if (
-        !message.isDuplicateTab &&
-        !document.querySelector(".probe-container")
-      ) {
+      if (!document.querySelector(".probe-container")) {
         sendResponse({ received: false, error: "Question container not ready" });
         return true;
       }
 
       let processing;
       try {
-        if (
-          doubleCreditMode &&
-          !message.isDuplicateTab &&
-          !waitingForDuplicateCompletion
-        ) {
-          currentResponse = message.response;
-          processing = processDoubleCreditResponse(message.response);
-        } else {
-          processing = processChatGPTResponse(message.response);
-        }
+        processing = processChatGPTResponse(message.response);
       } catch (error) {
         if (!error.retryable) handleProcessResponseError(error);
         sendResponse({ received: false, error: error.message });
@@ -138,18 +118,6 @@ function setupMessageListener() {
       return true;
     }
 
-    if (message.type === "processDuplicateTab") {
-      processDuplicateTabAnswering(message.response);
-      sendResponse({ received: true });
-      return true;
-    }
-
-    if (message.type === "completeDoubleCredit") {
-      completeDoubleCreditFlow();
-      sendResponse({ received: true });
-      return true;
-    }
-
     if (message.type === "alertMessage") {
       showAutomationStatus(message.message, true);
       sendResponse({ received: true });
@@ -176,22 +144,8 @@ function setupMessageListener() {
 }
 
 function updateButtonState() {
-  chrome.storage.sync.get(["aiModel", "doubleCreditMode"], function (data) {
-    const currentModel = data.aiModel || "chatgpt";
-    const doubleMode = data.doubleCreditMode || false;
-    let currentModelName = "ChatGPT";
-
-    if (currentModel === "gemini") {
-      currentModelName = "Gemini";
-    } else if (currentModel === "deepseek") {
-      currentModelName = "DeepSeek";
-    }
-
-    const btn = document.querySelector(".automcgraw-btn");
-    if (btn) {
-      btn.textContent = `Ask ${currentModelName}${doubleMode ? " (2x)" : ""}`;
-    }
-  });
+  const btn = document.querySelector(".automcgraw-btn");
+  if (btn) btn.textContent = "Ask ChatGPT";
 }
 
 function handleProcessResponseError(error) {
@@ -201,47 +155,9 @@ function handleProcessResponseError(error) {
   automationRunId++;
   activeQuestionRequestId = null;
   lastQueuedQuestionSignature = "";
-  waitingForDuplicateCompletion = false;
   clearMatchingPauseWatcher();
   updateButtonState();
   showAutomationStatus("Automation stopped: " + error.message + " Click Ask to try again.", true);
-}
-
-function processDoubleCreditResponse(responseText) {
-  try {
-    if (handleTopicOverview()) return;
-    if (handleForcedLearning()) return;
-
-    const response = JSON.parse(responseText);
-    const answers = Array.isArray(response.answer)
-      ? response.answer
-      : [response.answer];
-
-    const container = document.querySelector(".probe-container");
-    if (!container) return;
-
-    if (
-      container.querySelector(
-        ".awd-probe-type-matching, .awd-probe-type-sortable"
-      )
-    ) {
-      showAutomationStatus(
-        "Matching and ordering questions are not supported in double credit mode. Please complete manually.", true
-      );
-      isAutomating = false;
-      updateButtonState();
-      return;
-    }
-
-    fillInAnswers(answers, container);
-
-    waitingForDuplicateCompletion = true;
-    chrome.runtime.sendMessage({ type: "createDuplicateTab" });
-  } catch (e) {
-    console.error("Error processing double credit response:", e);
-    isAutomating = false;
-    updateButtonState();
-  }
 }
 
 function setTextInputValue(input, value) {
@@ -255,91 +171,6 @@ function setTextInputValue(input, value) {
   if (nativeSetter) nativeSetter.call(input, text);
   else input.value = text;
   return input.value === text;
-}
-
-function processDuplicateTabAnswering(responseText) {
-  try {
-
-    const response = JSON.parse(responseText);
-    const answers = Array.isArray(response.answer)
-      ? response.answer
-      : [response.answer];
-
-
-    waitForElement(".probe-container", 5000)
-      .then((container) => {
-
-        setTimeout(() => {
-          fillInAnswers(answers, container);
-
-          waitForElement(
-            getConfidenceSelector(),
-            3000
-          )
-            .then((button) => {
-              button.click();
-
-              setTimeout(() => {
-                chrome.runtime.sendMessage({ type: "finishDoubleCredit" });
-
-                setTimeout(() => {
-                  chrome.runtime.sendMessage({ type: "closeDuplicateTab" });
-                }, 300);
-              }, 800);
-            })
-            .catch((error) => {
-              console.error(
-                "Could not find high confidence button in duplicate tab:",
-                error
-              );
-            });
-        }, 500);
-      })
-      .catch((error) => {
-        console.error(
-          "Could not find probe container in duplicate tab:",
-          error
-        );
-      });
-  } catch (e) {
-    console.error("Error processing duplicate tab:", e);
-  }
-}
-
-function completeDoubleCreditFlow() {
-  waitingForDuplicateCompletion = false;
-
-  const container = document.querySelector(".probe-container");
-  if (!container) return;
-
-  waitForElement(
-    getConfidenceSelector(),
-    3000
-  ).then((button) => {
-    button.click();
-
-    setTimeout(() => {
-      checkForCorrectAnswer(container);
-
-      waitForElement(".next-button", 5000)
-        .then((nextButton) => {
-          nextButton.click();
-
-          chrome.runtime.sendMessage({ type: "resetTabTracking" });
-
-          if (isAutomating) {
-            setTimeout(() => {
-              checkForNextStep();
-            }, 800);
-          }
-        })
-        .catch((error) => {
-          console.error("Automation error:", error);
-          isAutomating = false;
-          updateButtonState();
-        });
-    }, 800);
-  });
 }
 
 function fillInAnswers(answers, container) {
@@ -682,7 +513,7 @@ function detectQuestionType(container) {
   if (container.querySelector(".awd-probe-type-matching")) {
     return "matching";
   }
-  if (container.querySelector(".awd-probe-type-sortable")) {
+  if (container.querySelector(".awd-probe-type-sortable") || container.querySelector(".sortable-component")) {
     return "ranking";
   }
   return "";
@@ -1157,12 +988,9 @@ function getMatchingComponent(container) {
 
 // SmartBook rewrites a dropped choice from choices:* to response:* once it lands in a row.
 const MATCHING_ALL_CHOICE_SELECTOR =
-  '.choice-item-wrapper:not(.-placeholder)[id^="choices:"], .choice-item-wrapper:not(.-placeholder)[id^="response:"]';
+  '.choice-item-wrapper:not(.-placeholder)[id^="choices:"], .choice-item-wrapper:not(.-placeholder)[id^="response:"], .draggableItem[data-item-key]';
 const MATCHING_POOL_CHOICE_SELECTOR =
-  '.choices-container .choice-item-wrapper:not(.-placeholder)[id^="choices:"]';
-const MATCHING_RESPONSE_CHOICE_SELECTOR =
-  '.choice-item-wrapper:not(.-placeholder)[id^="choices:"], .choice-item-wrapper:not(.-placeholder)[id^="response:"]';
-
+  '.choices-container .choice-item-wrapper:not(.-placeholder)[id^="choices:"], .choices-container .draggableItem[data-item-key]';
 function getMatchingRows(container) {
   const matchingComponent = getMatchingComponent(container);
   if (!matchingComponent) return [];
@@ -1187,7 +1015,7 @@ function getMatchingResponseSlots(container) {
       slotIndex,
       promptText,
       holder,
-      item: holder.querySelector(MATCHING_RESPONSE_CHOICE_SELECTOR),
+      item: holder.querySelector(MATCHING_ALL_CHOICE_SELECTOR),
     }));
   });
 }
@@ -1205,7 +1033,7 @@ function getMatchingChoiceText(choiceItem) {
   if (!choiceItem) return "";
 
   const contentEl =
-    choiceItem.querySelector(".content") || choiceItem.querySelector("p");
+    choiceItem.querySelector(".dragItemContent") || choiceItem.querySelector(".content") || choiceItem.querySelector("p");
   const rawText = getElementText(contentEl || choiceItem);
   return normalizeChoiceText(rawText || "");
 }
@@ -1228,6 +1056,25 @@ function getMatchingDragHandle(choiceItem) {
     choiceItem.querySelector("[data-react-beautiful-dnd-drag-handle]") ||
     choiceItem
   );
+}
+
+function dropNativeChoice(source, target, beforeTarget = false) {
+  if (!target) return false;
+  const dataTransfer = new DataTransfer();
+  const fire = (node, type) => {
+    const rect = node.getBoundingClientRect();
+    node.dispatchEvent(new DragEvent(type, {
+      bubbles: true, cancelable: true, dataTransfer,
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + (beforeTarget && node === target ? Math.min(5, rect.height / 2) : rect.height / 2),
+    }));
+  };
+  fire(source, "dragstart");
+  fire(target, "dragenter");
+  fire(target, "dragover");
+  fire(target, "drop");
+  fire(source, "dragend");
+  return true;
 }
 
 async function dragChoiceWithMouse(handle, getDestinationBox) {
@@ -1304,7 +1151,7 @@ async function dragChoiceWithMouse(handle, getDestinationBox) {
 function getSortableChoiceItems(container) {
   return Array.from(
     container.querySelectorAll(
-      ".sortable-component .vertical-list .choice-item[data-react-beautiful-dnd-draggable]"
+      ".sortable-component .vertical-list .choice-item[data-react-beautiful-dnd-draggable], .sortable-component .vertical-list .choice-item[draggable=true][data-index]"
     )
   );
 }
@@ -1314,7 +1161,7 @@ async function applyRankingAnswer(container, rawAnswers) {
   const initialTexts = getSortableChoiceItems(container).map((item) =>
     getMatchingChoiceText(item)
   );
-  if (answers.length !== initialTexts.length) return false;
+  if (!initialTexts.length || answers.length !== initialTexts.length) return false;
 
   const usedItemIndexes = new Set();
   const targetOrder = answers.map((answer) => {
@@ -1339,12 +1186,9 @@ async function applyRankingAnswer(container, rawAnswers) {
 
     const handle = getMatchingDragHandle(items[currentIndex]);
     if (!handle) return false;
-    if (
-      !(await dragChoiceWithMouse(
-        handle,
-        () => getSortableChoiceItems(container)[targetIndex]
-      ))
-    ) {
+    if (handle.matches?.(".choice-item[draggable=true][data-index]")) {
+      if (!dropNativeChoice(handle, items[targetIndex], true)) return false;
+    } else if (!(await dragChoiceWithMouse(handle, () => getSortableChoiceItems(container)[targetIndex]))) {
       return false;
     }
 
@@ -1797,7 +1641,10 @@ async function moveMatchingChoiceToTarget(
   if (!handle || !slots[targetIndex]?.holder) {
     return false;
   }
-  if (
+  if (handle.matches?.(".draggableItem[data-item-key]")) {
+    const zone = slots[targetIndex].holder.querySelector(".droppableContainer");
+    if (!dropNativeChoice(handle, zone)) return false;
+  } else if (
     !(await dragChoiceWithMouse(handle, () => {
       const liveDestination =
         getMatchingResponseSlots(container)[targetIndex]?.holder;
@@ -2216,95 +2063,58 @@ function addAssistantButton() {
     buttonContainer.style.display = "flex";
     buttonContainer.style.marginLeft = "10px";
 
-    chrome.storage.sync.get(["aiModel", "doubleCreditMode"], function (data) {
-      const aiModel = data.aiModel || "chatgpt";
-      doubleCreditMode = data.doubleCreditMode || false;
-      let modelName = "ChatGPT";
-
-      if (aiModel === "gemini") {
-        modelName = "Gemini";
-      } else if (aiModel === "deepseek") {
-        modelName = "DeepSeek";
+    const btn = document.createElement("button");
+    btn.textContent = "Ask ChatGPT";
+    btn.classList.add("btn", "btn-secondary", "automcgraw-btn");
+    btn.style.borderTopRightRadius = "0";
+    btn.style.borderBottomRightRadius = "0";
+    btn.addEventListener("click", () => {
+      if (isAutomating) {
+        recordDiagnostic("run.stopped.manual", { status: "stopped" });
+        const stoppedRequestId = activeQuestionRequestId;
+        isAutomating = false;
+        automationRunId++;
+        activeQuestionRequestId = null;
+        lastQueuedQuestionSignature = "";
+        clearMatchingPauseWatcher();
+        chrome.runtime.sendMessage({
+          type: "resetTabTracking",
+          requestId: stoppedRequestId,
+        });
+        updateButtonState();
+        showAutomationStatus("Automation stopped.");
+      } else {
+        isAutomating = true;
+        automationRunId++;
+        activeQuestionRequestId = null;
+        lastQueuedQuestionSignature = "";
+        clearMatchingPauseWatcher();
+        btn.textContent = "Stop Automation";
+        recordDiagnostic("run.started");
+        checkForNextStep();
       }
-
-      const btn = document.createElement("button");
-      btn.textContent = `Ask ${modelName}${doubleCreditMode ? " (2x)" : ""}`;
-      btn.classList.add("btn", "btn-secondary", "automcgraw-btn");
-      btn.style.borderTopRightRadius = "0";
-      btn.style.borderBottomRightRadius = "0";
-      btn.addEventListener("click", () => {
-        if (isAutomating) {
-          recordDiagnostic("run.stopped.manual", { status: "stopped" });
-          const stoppedRequestId = activeQuestionRequestId;
-          isAutomating = false;
-          automationRunId++;
-          activeQuestionRequestId = null;
-          lastQueuedQuestionSignature = "";
-          waitingForDuplicateCompletion = false;
-          clearMatchingPauseWatcher();
-          chrome.runtime.sendMessage({
-            type: "resetTabTracking",
-            requestId: stoppedRequestId,
-          });
-          updateButtonState();
-          showAutomationStatus("Automation stopped.");
-        } else {
-          isAutomating = true;
-          automationRunId++;
-          activeQuestionRequestId = null;
-          lastQueuedQuestionSignature = "";
-          clearMatchingPauseWatcher();
-          btn.textContent = "Stop Automation";
-          recordDiagnostic("run.started");
-          checkForNextStep();
-        }
-      });
-
-      const settingsBtn = document.createElement("button");
-      settingsBtn.classList.add("btn", "btn-secondary");
-      settingsBtn.style.borderTopLeftRadius = "0";
-      settingsBtn.style.borderBottomLeftRadius = "0";
-      settingsBtn.style.borderLeft = "1px solid rgba(0,0,0,0.2)";
-      settingsBtn.style.padding = "6px 10px";
-      settingsBtn.title = "Auto-McGraw Settings";
-      settingsBtn.innerHTML = `
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="3"></circle>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-        </svg>
-      `;
-      settingsBtn.addEventListener("click", () => {
-        chrome.runtime.sendMessage({ type: "openSettings" });
-      });
-
-      buttonContainer.appendChild(btn);
-      buttonContainer.appendChild(settingsBtn);
-      headerNav.appendChild(buttonContainer);
-
-      chrome.storage.onChanged.addListener((changes) => {
-        if ((changes.aiModel || changes.doubleCreditMode) && !isAutomating) {
-          chrome.storage.sync.get(
-            ["aiModel", "doubleCreditMode"],
-            function (data) {
-              const newModel = data.aiModel || "chatgpt";
-              const doubleMode = data.doubleCreditMode || false;
-              doubleCreditMode = doubleMode;
-              let newModelName = "ChatGPT";
-
-              if (newModel === "gemini") {
-                newModelName = "Gemini";
-              } else if (newModel === "deepseek") {
-                newModelName = "DeepSeek";
-              }
-
-              btn.textContent = `Ask ${newModelName}${
-                doubleMode ? " (2x)" : ""
-              }`;
-            }
-          );
-        }
-      });
     });
+
+    const settingsBtn = document.createElement("button");
+    settingsBtn.classList.add("btn", "btn-secondary");
+    settingsBtn.style.borderTopLeftRadius = "0";
+    settingsBtn.style.borderBottomLeftRadius = "0";
+    settingsBtn.style.borderLeft = "1px solid rgba(0,0,0,0.2)";
+    settingsBtn.style.padding = "6px 10px";
+    settingsBtn.title = "Auto-McGraw Settings";
+    settingsBtn.innerHTML = `
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"></circle>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+      </svg>
+    `;
+    settingsBtn.addEventListener("click", () => {
+      chrome.runtime.sendMessage({ type: "openSettings" });
+    });
+
+    buttonContainer.appendChild(btn);
+    buttonContainer.appendChild(settingsBtn);
+    headerNav.appendChild(buttonContainer);
   });
 }
 
@@ -2376,11 +2186,19 @@ function parseQuestion(
         .map((item) => getMatchingChoiceText(item))
         .filter(Boolean)
     );
+    if (!prompts.length || !choices.length) {
+      showAutomationStatus("Waiting for McGraw to display matching prompts and choices.");
+      return null;
+    }
     options = { prompts, choices };
   } else if (questionType === "ranking") {
     options = getSortableChoiceItems(container)
       .map((item) => getMatchingChoiceText(item))
       .filter(Boolean);
+    if (!options.length) {
+      showAutomationStatus("Waiting for McGraw to display the ordering items.");
+      return null;
+    }
   } else if (questionType === "select_text") {
     options = Array.from(
       container.querySelectorAll(".select-text-component .choice.-interactive")

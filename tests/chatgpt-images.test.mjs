@@ -10,7 +10,7 @@ const send = { disabled: true };
 const form = {
   querySelector(selector) {
     if (selector === 'input[type="file"]') return upload;
-    if (selector === '[data-testid="send-button"]') return send;
+    if (selector.includes('[data-testid="send-button"]')) return send;
     return null;
   },
   querySelectorAll: () => Array.from({ length: previews }, () => ({})),

@@ -105,21 +105,10 @@ function stopAutomation(reason = "Quiz completed") {
   isAutomating = false;
   clearManualPauseWatcher();
 
-  chrome.storage.sync.get("aiModel", function (data) {
-    const currentModel = data.aiModel || "chatgpt";
-    let currentModelName = "ChatGPT";
-
-    if (currentModel === "gemini") {
-      currentModelName = "Gemini";
-    } else if (currentModel === "deepseek") {
-      currentModelName = "DeepSeek";
-    }
-
-    const btn = document.querySelector(".header__automcgraw--main");
-    if (btn) {
-      btn.textContent = `Ask ${currentModelName}`;
-    }
-  });
+  const btn = document.querySelector(".header__automcgraw--main");
+  if (btn) {
+    btn.textContent = "Ask ChatGPT";
+  }
 
   if (reason) {
     alert(`Automation stopped: ${reason}`);
@@ -604,117 +593,89 @@ function addAssistantButton() {
     align-items: center;
   `;
 
-  chrome.storage.sync.get("aiModel", function (data) {
-    const aiModel = data.aiModel || "chatgpt";
-    let modelName = "ChatGPT";
+  const btn = document.createElement("button");
+  btn.textContent = "Ask ChatGPT";
+  btn.type = "button";
+  btn.className = "header__automcgraw--main";
+  btn.style.cssText = `
+    background: #fff;
+    border: 1px solid #ccc;
+    color: #333;
+    padding: 8px 12px;
+    font-size: 14px;
+    font-family: inherit;
+    cursor: pointer;
+    border-radius: 4px 0 0 4px;
+    border-right: none;
+    height: 32px;
+    line-height: 1;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    transition: background-color 0.2s ease;
+  `;
 
-    if (aiModel === "gemini") {
-      modelName = "Gemini";
-    } else if (aiModel === "deepseek") {
-      modelName = "DeepSeek";
-    }
-
-    const btn = document.createElement("button");
-    btn.textContent = `Ask ${modelName}`;
-    btn.type = "button";
-    btn.className = "header__automcgraw--main";
-    btn.style.cssText = `
-      background: #fff;
-      border: 1px solid #ccc;
-      color: #333;
-      padding: 8px 12px;
-      font-size: 14px;
-      font-family: inherit;
-      cursor: pointer;
-      border-radius: 4px 0 0 4px;
-      border-right: none;
-      height: 32px;
-      line-height: 1;
-      text-decoration: none;
-      display: inline-flex;
-      align-items: center;
-      transition: background-color 0.2s ease;
-    `;
-
-    btn.addEventListener("mouseenter", () => {
-      btn.style.backgroundColor = "#f5f5f5";
-    });
-
-    btn.addEventListener("mouseleave", () => {
-      btn.style.backgroundColor = "#fff";
-    });
-
-    btn.addEventListener("click", () => {
-      if (isAutomating) {
-        stopAutomation("Manual stop");
-      } else {
-        isAutomating = true;
-        btn.textContent = "Stop Automation";
-        checkForNextStep();
-      }
-    });
-
-    const settingsBtn = document.createElement("button");
-    settingsBtn.type = "button";
-    settingsBtn.className = "header__automcgraw--settings";
-    settingsBtn.title = "Auto-McGraw Settings";
-    settingsBtn.setAttribute("aria-label", "Auto-McGraw Settings");
-    settingsBtn.style.cssText = `
-      background: #fff;
-      border: 1px solid #ccc;
-      color: #333;
-      padding: 8px 10px;
-      font-size: 14px;
-      cursor: pointer;
-      border-radius: 0 4px 4px 0;
-      height: 32px;
-      line-height: 1;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      transition: background-color 0.2s ease;
-    `;
-
-    settingsBtn.addEventListener("mouseenter", () => {
-      settingsBtn.style.backgroundColor = "#f5f5f5";
-    });
-
-    settingsBtn.addEventListener("mouseleave", () => {
-      settingsBtn.style.backgroundColor = "#fff";
-    });
-
-    settingsBtn.innerHTML = `
-      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="3"></circle>
-        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06-.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06-.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-      </svg>
-    `;
-
-    settingsBtn.addEventListener("click", () => {
-      chrome.runtime.sendMessage({ type: "openSettings" });
-    });
-
-    buttonContainer.appendChild(btn);
-    buttonContainer.appendChild(settingsBtn);
-    helpLink.parentNode.insertBefore(buttonContainer, helpLink);
-
-    chrome.storage.onChanged.addListener((changes) => {
-      if (changes.aiModel) {
-        const newModel = changes.aiModel.newValue;
-        let newModelName = "ChatGPT";
-
-        if (newModel === "gemini") {
-          newModelName = "Gemini";
-        } else if (newModel === "deepseek") {
-          newModelName = "DeepSeek";
-        }
-
-        if (!isAutomating) {
-          btn.textContent = `Ask ${newModelName}`;
-        }
-      }
-    });
+  btn.addEventListener("mouseenter", () => {
+    btn.style.backgroundColor = "#f5f5f5";
   });
+
+  btn.addEventListener("mouseleave", () => {
+    btn.style.backgroundColor = "#fff";
+  });
+
+  btn.addEventListener("click", () => {
+    if (isAutomating) {
+      stopAutomation("Manual stop");
+    } else {
+      isAutomating = true;
+      btn.textContent = "Stop Automation";
+      checkForNextStep();
+    }
+  });
+
+  const settingsBtn = document.createElement("button");
+  settingsBtn.type = "button";
+  settingsBtn.className = "header__automcgraw--settings";
+  settingsBtn.title = "Auto-McGraw Settings";
+  settingsBtn.setAttribute("aria-label", "Auto-McGraw Settings");
+  settingsBtn.style.cssText = `
+    background: #fff;
+    border: 1px solid #ccc;
+    color: #333;
+    padding: 8px 10px;
+    font-size: 14px;
+    cursor: pointer;
+    border-radius: 0 4px 4px 0;
+    height: 32px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.2s ease;
+  `;
+
+  settingsBtn.addEventListener("mouseenter", () => {
+    settingsBtn.style.backgroundColor = "#f5f5f5";
+  });
+
+  settingsBtn.addEventListener("mouseleave", () => {
+    settingsBtn.style.backgroundColor = "#fff";
+  });
+
+  settingsBtn.innerHTML = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="3"></circle>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06-.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06-.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+    </svg>
+  `;
+
+  settingsBtn.addEventListener("click", () => {
+    chrome.runtime.sendMessage({ type: "openSettings" });
+  });
+
+  buttonContainer.appendChild(btn);
+  buttonContainer.appendChild(settingsBtn);
+  helpLink.parentNode.insertBefore(buttonContainer, helpLink);
 }
 
 function waitForElement(selector, timeout = 5000) {
