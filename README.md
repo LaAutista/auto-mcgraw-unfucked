@@ -1,83 +1,30 @@
-# auto-mcgraw-unfucked
+# Auto-McGraw
 
-A Firefox-first community fork of [GooglyBlox/auto-mcgraw](https://github.com/GooglyBlox/auto-mcgraw), maintained by LaAutista. Fixes unreliable ChatGPT answer capture, tab switching, duplicate question requests, diagram questions, and matching-choice parsing in McGraw Hill SmartBook.
+Auto-McGraw is a Firefox extension for McGraw Hill SmartBook. Click **Ask ChatGPT** on a question and the extension sends its text, choices, and supported diagrams to your open ChatGPT tab. It brings the answer back to SmartBook, fills it in, and can submit it and advance to the next question.
 
-## Release status
+**[Download Auto-McGraw 3.0 for Firefox](https://github.com/LaAutista/auto-mcgraw-unfucked/releases/download/v3.0/auto-mcgraw-firefox-3.0-unsigned.xpi)** · [3.0 release notes](https://github.com/LaAutista/auto-mcgraw-unfucked/releases/tag/v3.0)
 
-**3.0** is the Firefox build for ChatGPT. It includes the 2.12.4 composer updates and supports both the current native drag controls and the older SmartBook matching and ordering layouts. The extension reads back the placements before submitting. The legacy double-credit mode was removed. Each question is submitted in its original tab.
+## Install in Firefox
 
-See [release notes](RELEASE_NOTES.md) for the live test and its scope. The previous published release is available on [GitHub](https://github.com/LaAutista/auto-mcgraw-unfucked/releases).
+1. Download the XPI above. Use Firefox 140 or newer.
+2. Open `about:debugging#/runtime/this-firefox`, click **Load Temporary Add-on**, and select the downloaded XPI.
+3. Open or refresh your SmartBook assignment and ChatGPT in separate tabs. Sign in to both.
 
-## Installation
+The XPI is unsigned. Load it again after restarting Firefox.
 
-### Firefox — primary build
+## Use it on an assignment
 
-Requires Firefox 140 or newer.
+Click **Ask ChatGPT** in the SmartBook header to start. By default, Auto-McGraw submits each answer in the assignment tab. To review answers first, open the settings beside **Ask ChatGPT** and turn on **Pause Before Submit**. Click **Stop Automation** to stop the run.
 
-1. Use the supplied `auto-mcgraw-firefox-3.0-unsigned.xpi`.
-2. Open `about:debugging#/runtime/this-firefox`.
-3. Click **Load Temporary Add-on** and select the XPI.
-4. Refresh existing SmartBook and ChatGPT tabs after installing or upgrading.
+For multiple-choice, multiple-select, true/false, and fill-in-the-blank questions, the extension clicks the corresponding controls or fills the blanks. Version 3.0 also handles SmartBook’s current drag-and-drop layouts.
 
-The XPI is unsigned. Temporary installation ends when Firefox restarts; reload it through `about:debugging` afterward. Permanent installation in standard Firefox requires a Mozilla-signed XPI. This release does not bypass signing requirements.
+- **Matching questions.** Auto-McGraw reads the prompts and the labels on the draggable choices. It moves each choice into the corresponding slot and checks the placements before submitting.
+- **Ordering questions.** Auto-McGraw sends the displayed items to ChatGPT, moves the rows into the returned sequence, and reads the list back to verify the order before submitting.
 
-For diagram questions, open extension settings and click **Allow question images** if Firefox has not granted access to McGraw's image server.
+If a placement fails verification, SmartBook stays on the question for manual review. For questions with diagrams, use **Allow question images** in settings if Firefox requests site access.
 
-### Chrome / Brave — experimental, untested
+## Data and diagnostics
 
-Requires Chromium 121 or newer (including a corresponding Brave version).
+Question content and supported images go to ChatGPT through your signed-in tab. **Save diagnostic log** in settings exports the last 300 local events, including request status, answer delivery, and navigation. Question text, answer text, and images are excluded from the log.
 
-1. For a Chromium candidate, run the repository’s **Build Release Candidates** workflow and extract the experimental Chromium ZIP from its artifacts.
-2. Open `chrome://extensions/` or `brave://extensions/`.
-3. Enable **Developer mode**, click **Load unpacked**, and select the extracted folder.
-
-This package is provided for testing, not as a verified equivalent of the Firefox build.
-
-## What was fixed
-
-- **Ask does nothing after blocking dialogs:** the explicit Ask button starts directly, without a browser confirmation popup. Errors and manual-pause instructions stay visible on the page.
-- **ChatGPT answers are missed or captured incorrectly:** waits for completed, settled JSON; rejects observed animation artifacts; tracks message IDs; ignores empty trailing assistant placeholders; verifies that prompts actually send.
-- **Tab switching stalls:** activates tabs even when window focus is denied and keeps ChatGPT foregrounded until its answer is ready.
-- **Repeated questions after grading:** excludes correctness labels from choices and waits for an actual question transition before requesting another answer.
-- **Diagram questions and empty answers:** attaches up to four supported McGraw diagrams to ChatGPT, includes accessible descriptions, and makes upload failures or empty answers visible instead of retrying forever.
-- **Broken matching choices:** preserves semicolons and commas within exact choices and rejects ambiguous partial matches.
-- **Failures without useful diagnostics:** keeps the last 300 diagnostic events locally, with an export button in settings.
-
-## Usage
-
-1. Open a SmartBook assignment while logged into McGraw Hill.
-2. Open [ChatGPT](https://chatgpt.com) in another tab and log in.
-3. In extension settings, leave **Switch Between Tabs** enabled for the tested workflow.
-4. Click **Ask ChatGPT** in the SmartBook header. The extension sends the question, collects the answer, and fills it. With **Pause Before Submit** off, it also submits and advances.
-
-Use **Pause Before Submit** to review filled answers yourself. Click **Stop Automation** to stop. If an answer cannot be matched safely, follow the on-page manual-pause instructions; automation can resume after you advance manually.
-
-EZTO and MuzzyLane remain in the source. The 3.0 live run covered SmartBook in Firefox. AI answers can still be wrong, and site changes can break automation.
-
-## Diagnostics and privacy
-
-Open settings and click **Save diagnostic log** to export the local 300-event log. It contains request, answer-delivery, navigation, and error metadata—not question text, answer text, images, or login data. Review any export before sharing it publicly.
-
-The extension reads visible assignment content and sends it to ChatGPT through its browser tab. Supported question images are fetched from McGraw and attached to ChatGPT. No analytics server or data collection endpoint operated by LaAutista is used. Settings use browser sync storage; diagnostics stay in local extension storage. OpenAI’s privacy policy applies to the content it receives.
-
-## Development
-
-Run all 12 regression test files with Node.js:
-
-```sh
-node --test tests/*.test.mjs
-```
-
-Passing these tests does not establish compatibility with every course, browser, or future site layout.
-
-The manually triggered **Build Release Candidates** GitHub workflow runs these
-tests and creates browser packages with checksums. It does not publish releases
-or replace previously tested downloads.
-
-## Credits and license
-
-Based on [GooglyBlox/auto-mcgraw](https://github.com/GooglyBlox/auto-mcgraw). The original GooglyBlox copyright notice and [MIT license](LICENSE) are preserved.
-
-This independent project is not affiliated with or endorsed by McGraw Hill, OpenAI, or other named services. Third-party names and assets belong to their respective owners. Use responsibly and follow your institution's academic-integrity policies.
-
-Found a bug? [Open an issue](https://github.com/LaAutista/auto-mcgraw-unfucked/issues) with the browser, extension version, and relevant diagnostic events.
+Based on [GooglyBlox/auto-mcgraw](https://github.com/GooglyBlox/auto-mcgraw). Distributed under the [MIT license](LICENSE).
