@@ -1,3 +1,19 @@
+# 3.0
+
+This Firefox build uses ChatGPT as its only provider, including for users who saved another provider in 2.x. It carries forward the ChatGPT composer changes from the desktop 2.12.4 build.
+
+SmartBook changed both drag controls. Matching choices now live in native draggable items, and ranking rows have their own drop targets. Auto-McGraw reads the displayed choice text, sends the choices to ChatGPT, performs the requested moves, and checks the resulting slots or order before submitting. If the choices have yet to render, it waits. The original SmartBook drag layout remains covered by regression tests.
+
+The previous double-credit setting is retired. All question types use the original assignment tab.
+
+## Firefox verification
+
+During the live astronomy assignment, 2.12.4 had stopped at 8 of 23 concepts after sending a matching question without its choices. An intermediate 3.0 build filled that question and advanced. At 10 of 23, the ordering question exposed a different row layout. For the final retest, the first item was moved to third before starting automation. The extension restored the four-item order. McGraw marked all four correct and advanced to 11 of 23.
+
+The final build ran from 10 of 23 concepts through the SmartBook completion summary, which reported **100% accuracy and zero challenging concepts out of 23**. No answers were entered manually after the ordering retest started. The rolling diagnostic log retained the last 17 submitted answers, with one confidence click and one successful delivery per request. Those answers included one additional ranking and two matching questions. Six requests included image attachments. The final event was `mhe.run.completed`.
+
+All 12 Node regression files passed, including current and legacy ordering and matching checks. The Firefox XPI was verified against the source and has SHA-256 `ea851fd508aa9605b2a8f89770dde964da3118b88f46a384cd9bd54e7d6a62e7`. Live coverage was Firefox 160 with ChatGPT on this SmartBook assignment.
+
 # v2.12.3 — first maintained fork release
 
 The first official maintained release of **auto-mcgraw-unfucked**, LaAutista's community fork of GooglyBlox/auto-mcgraw. Earlier trial releases are retired. The version remains **2.12.3** to retain the identity of the Firefox build that was actually tested; its Firefox XPI is preserved byte-for-byte.
