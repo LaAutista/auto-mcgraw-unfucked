@@ -108,6 +108,11 @@ async function insertQuestion(questionData, requestId = activeRequestId) {
   const { type, question, options, previousCorrection } = questionData;
   let text = `Type: ${type}\nQuestion: ${question}`;
 
+  if (questionData.context) {
+    text += `\n\nRequired information supplied with this question:\n${questionData.context}`;
+    text += '\nUse the supplied text, recording credits, and reference filenames when identifying the excerpt. If this information is insufficient, set "answer" to null and explain what is missing.';
+  }
+
   if (
     previousCorrection &&
     previousCorrection.question &&

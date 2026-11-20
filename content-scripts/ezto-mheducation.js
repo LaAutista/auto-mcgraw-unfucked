@@ -12,8 +12,9 @@ function setupMessageListener() {
 
   messageListener = (message, sender, sendResponse) => {
     if (message.type === "processChatGPTResponse") {
-      processChatGPTResponse(message.response);
       sendResponse({ received: true });
+      // Acknowledge before a manual-answer alert can block response delivery.
+      setTimeout(() => processChatGPTResponse(message.response), 0);
       return true;
     }
 
@@ -115,11 +116,10 @@ function stopAutomation(reason = "Quiz completed") {
   }
 }
 
-// After a manual fallback, resume only when the user advances to a different
-// question (detected via the "N of M" counter in the footer changing).
+// Multipart questions share a footer counter but have different page titles.
 function pauseForManualAndResume() {
   const progressEl = document.querySelector(".footer__progress__heading");
-  const signature = progressEl ? progressEl.textContent.trim() : "";
+  const signature = document.title + (progressEl ? progressEl.textContent.trim() : "");
 
   clearManualPauseWatcher();
 
@@ -130,7 +130,7 @@ function pauseForManualAndResume() {
     }
 
     const currentEl = document.querySelector(".footer__progress__heading");
-    const currentSignature = currentEl ? currentEl.textContent.trim() : "";
+    const currentSignature = document.title + (currentEl ? currentEl.textContent.trim() : "");
 
     if (currentSignature && currentSignature !== signature) {
       clearManualPauseWatcher();
@@ -183,6 +183,34 @@ function getChoicePairs(inputSelector) {
   });
 }
 
+function getQuestionContext() {
+  const parts = [];
+  const audioNames = new Set();
+  for (const note of document.querySelectorAll('.note__main')) {
+    if (!note.getClientRects().length) continue;
+    const copy = note.cloneNode(true);
+    copy.querySelectorAll('audio, video, button, script, style, [aria-label="audio player"], [hidden], [aria-hidden="true"]')
+      .forEach((element) => element.remove());
+    const text = copy.textContent.replace(/\s+/g, ' ').trim();
+    if (text) parts.push(text);
+
+    for (const audio of note.querySelectorAll('audio, audio source')) {
+      const src = audio.currentSrc || audio.getAttribute('src');
+      if (!src) continue;
+      try {
+        const url = new URL(src, document.baseURI);
+        if (!['https:', 'http:'].includes(url.protocol)) continue;
+        const name = decodeURIComponent(url.pathname.split('/').pop());
+        if (name) audioNames.add(name);
+      } catch (_) {
+        // Malformed media URLs must not discard the visible recording credits.
+      }
+    }
+  }
+  if (audioNames.size) parts.push('Audio reference filenames: ' + [...audioNames].join(', '));
+  return parts.join('\n');
+}
+
 // Worksheet MC ("classification") questions: one prompt, then a numbered list
 // of items, each with its own fieldset of radio choices (same choices per
 // item). Prompt text excludes the per-item radio markup; items and the shared
@@ -220,6 +248,7 @@ function parseWorksheetMcQuestion() {
   return {
     type: "worksheet_mc",
     question: questionText,
+    context: getQuestionContext(),
     options: { items, choices },
     previousCorrection: lastIncorrectQuestion
       ? {
@@ -339,6 +368,7 @@ function parseQuestion() {
   return {
     type: questionType,
     question: questionText,
+    context: getQuestionContext(),
     options: options,
     previousCorrection: lastIncorrectQuestion
       ? {
@@ -425,8 +455,8 @@ function isOptionMatch(choiceText, answerText) {
     return false;
   }
 
-  const choice = String(choiceText).trim().replace(/^[a-z]\s+/, "");
-  const ans = String(answerText).trim().replace(/^[a-z]\s+/, "");
+  const choice = String(choiceText).replace(/\s+/g, " ").trim().replace(/^[a-z]\s+/, "");
+  const ans = String(answerText).replace(/\s+/g, " ").trim().replace(/^[a-z]\s+/, "");
   if (!choice || !ans) return false;
 
   if (choice === ans) return true;
@@ -560,6 +590,7 @@ function handleTrueFalseAnswer(answer) {
 }
 
 function handleFillInTheBlankAnswer(answer) {
+  if (answer === null || answer === undefined) return 0;
   const inputField = document.querySelector(".answer--input__input");
 
   if (inputField) {
