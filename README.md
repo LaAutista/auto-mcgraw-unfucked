@@ -2,7 +2,7 @@
 
 Auto-McGraw is a Firefox extension for McGraw Hill SmartBook and Connect quizzes. Click **Ask ChatGPT** on a question and the extension sends its text and choices to your open ChatGPT tab. It brings the answer back, fills it in, and advances through supported questions. SmartBook also supports question diagrams and automatic answer submission.
 
-**[Download Auto-McGraw 3.0 for Firefox](https://github.com/LaAutista/auto-mcgraw-unfucked/releases/download/v3.0/auto-mcgraw-firefox-3.0-unsigned.xpi)** · [3.0 release notes](https://github.com/LaAutista/auto-mcgraw-unfucked/releases/tag/v3.0)
+**[Download Auto-McGraw 3.0.1 for Firefox](https://github.com/LaAutista/auto-mcgraw-unfucked/releases/download/v3.0.1/auto-mcgraw-firefox-3.0.1-unsigned.xpi)** · [3.0.1 release notes](https://github.com/LaAutista/auto-mcgraw-unfucked/releases/tag/v3.0.1)
 
 ## Install in Firefox
 
@@ -11,6 +11,8 @@ Auto-McGraw is a Firefox extension for McGraw Hill SmartBook and Connect quizzes
 3. Open or refresh your SmartBook assignment and ChatGPT in separate tabs. Sign in to both.
 
 The XPI is unsigned. Load it again after restarting Firefox.
+
+When updating during a quiz, leave McGraw open and refresh ChatGPT after loading the replacement XPI.
 
 ## Use it on an assignment
 
